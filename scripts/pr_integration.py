@@ -98,7 +98,8 @@ def run(state_path):
         state_path.write_text(json.dumps(state))
         api(f'repos/{repo}/git/refs', dict(ref=f'refs/heads/{branch}', sha=commit))
         pr = api(f'repos/{repo}/pulls', dict(title=f'HPC integration test {scenario}', head=branch,
-                  base=default, draft=True, body='Automated regression test, closed after verification.'))['number']
+                  base=default, draft=True, body='Automated regression test, closed after verification.'),
+                 token=token)['number']
         state[-1]['pr'] = pr
         state_path.write_text(json.dumps(state))
         comment = api(f'repos/{repo}/issues/{pr}/comments', dict(body='/hpc'),

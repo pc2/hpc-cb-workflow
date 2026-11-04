@@ -42,7 +42,7 @@ jobs:
           
           def authorized_test_pr(pr, login, expected_login, repo):
               return bool(expected_login and login.lower() == expected_login.lower() and
-                          pr['user']['login'] == 'github-actions[bot]' and
+                          pr['user']['login'].lower() == expected_login.lower() and
                           pr['head']['repo']['full_name'] == repo and
                           re.fullmatch(r'hpc-test/[0-9]+-[0-9]+/(pass|fail)', pr['head']['ref']) and
                           pr['title'].startswith('HPC integration test '))

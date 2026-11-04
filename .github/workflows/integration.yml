@@ -211,6 +211,8 @@ jobs:
             [[ $(unzip -p "$RUNNER_TEMP/collected/slow.zip" results/failure.txt) == "$SHA" ]]
           fi
           if [[ $SCENARIO == benchmark ]]; then
+            allocation=$(unzip -p "$RUNNER_TEMP/collected/benchmark.zip" results/slurm-job-id.txt)
+            [[ $allocation =~ ^[0-9]+$ ]]
             unzip -p "$RUNNER_TEMP/collected/benchmark.zip" results/benchmark.json |
               jq -e --arg sha "$SHA" '.schema == 1 and .sha == $sha and .unit == "seconds"
                 and (.value | type == "number" and . > 0) and .threads == 1 and .blas_threads == 1'

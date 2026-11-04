@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import benchmark_support as benchmark
 import hpc_command
 import embed_helpers
+import pr_integration
 
 
 class BenchmarkTests(unittest.TestCase):
@@ -28,13 +29,52 @@ class BenchmarkTests(unittest.TestCase):
                 benchmark.relative_path(path)
 
     def test_test_account_is_restricted_to_generated_prs(self):
-        pr = dict(user=dict(login='github-actions[bot]'), title='HPC integration test pass',
+        pr = dict(user=dict(login='user'), title='HPC integration test pass',
                   head=dict(repo=dict(full_name='pc2/test'), ref='hpc-test/12-1/pass'))
         self.assertTrue(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
         self.assertFalse(hpc_command.authorized_test_pr(pr, 'other', 'user', 'pc2/test'))
         self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', '', 'pc2/test'))
+        self.assertTrue(hpc_command.authorized_test_pr(pr, 'USER', 'User', 'pc2/test'))
+        for author in ('other', 'github-actions[bot]'):
+            self.assertFalse(hpc_command.authorized_test_pr(pr | {'user': {'login': author}},
+                                                          'user', 'user', 'pc2/test'))
         pr['head']['ref'] = 'unreviewed'
         self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
+
+    def test_pr_creation_uses_the_test_token_without_granting_it_branch_access(self):
+        class CreatedPR(Exception):
+            pass
+
+        requests = []
+        def api(path, body=None, method=None, token=None):
+            requests.append((path, token))
+            if path == 'user':
+                return {'login': 'user'}
+            if path == 'repos/pc2/test':
+                return {'default_branch': 'main'}
+            if path.endswith('/dispatches'):
+                return {'workflow_run_id': 1}
+            if path.endswith('/git/ref/heads/hpc-test-results'):
+                return {'object': {'sha': 'baseline'}}
+            if '/git/commits/' in path:
+                return {'tree': {'sha': 'tree'}}
+            if path.endswith(('/git/trees', '/git/commits')):
+                return {'sha': 'fixture'}
+            if path.endswith('/git/refs'):
+                return {}
+            if path.endswith('/pulls'):
+                raise CreatedPR()
+            self.fail(f'Unexpected request {path}.')
+
+        env = dict(CB_TEST_TOKEN='test-token', CB_TEST_ACTOR='user',
+                   GITHUB_REPOSITORY='pc2/test', GITHUB_SHA='a' * 40,
+                   GITHUB_RUN_ID='12', GITHUB_RUN_ATTEMPT='1')
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, env), \
+             patch.object(pr_integration, 'api', side_effect=api), patch.object(pr_integration, 'wait_run'):
+            with self.assertRaises(CreatedPR):
+                pr_integration.run(Path(directory) / 'state.json')
+        self.assertIn(('repos/pc2/test/pulls', 'test-token'), requests)
+        self.assertTrue(all(token is None for path, token in requests if '/git/' in path))
 
     def test_reusable_workflows_embed_the_tested_helpers(self):
         for template in (embed_helpers.ROOT / '.github/templates').glob('*.yml'):

@@ -34,11 +34,11 @@ jobs:
       pull_request: ${{ inputs.pull_request }}
       source_sha: ${{ inputs.source_sha }}
       context_run_id: ${{ inputs.context_run_id }}
-      max_wait_minutes: ${{ inputs.context_run_id == '' && '1' || '330' }}
+      max_wait_minutes: ${{ inputs.source_sha != '' && inputs.context_run_id == '' && '1' || '330' }}
       pipeline_variables: |
         EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
         SCENARIO=regression
-        HANDOVER=true
+        HANDOVER=${{ inputs.source_sha != '' && 'true' || 'false' }}
       benchmark: >-
         {"mode":"history","branch":"hpc-test-results","suites":[
           {"name":"Regression fixture","archive":"regression.zip",

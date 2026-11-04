@@ -189,6 +189,7 @@ The [integration workflow](.github/workflows/integration.yml) calls the reusable
 It mirrors this repository's commit, its [pipeline](.gitlab-ci.yml) runs on the configured GitLab project.
 Configure `GITLAB_HOSTNAME`, `GITLAB_PROJECT_ID`, `GITLAB_TOKEN` and `GITLAB_TRIGGER_TOKEN` in this repository as described in [Setup](#setup).
 The GitLab project needs a runner with the `otus-shell` tag, override `INTEGRATION_RUNNER_TAG` in the project's CI/CD variables for another runner.
+The Julia benchmark also requires the `otus-slurm` runner, override `BENCHMARK_RUNNER_TAG` for another Slurm runner.
 The integration suite runs every scenario on pushes to `main` and weekly.
 Maintainers can also dispatch the suite or an individual scenario.
 The suite starts separate runs and follows each continuation to completion.
@@ -203,9 +204,9 @@ It checks the pipeline commit, trigger variables, job results, check runs, colle
 | --- | --- | --- |
 | `success` | One job with an artifact. | Collection, check runs and the PR comment. |
 | `failure` | One failing job. | Artifacts are collected and the `hpc` job fails, the run is red by design. |
-| `handover` | One job sleeping five minutes. | Monitoring stops after one minute and dispatches a continuation run. |
-| `handover_failure` | A job sleeps five minutes, writes an artifact and fails. | Continuation reports failure and collects the failed job's artifact. |
-| `benchmark` | A Julia dense linear solve. | Measurement JSON is collected with the tested commit. |
+| `handover` | One job sleeping three minutes. | Monitoring stops after one minute and dispatches a continuation run. |
+| `handover_failure` | A job sleeps three minutes, writes an artifact and fails. | Continuation reports failure and collects the failed job's artifact. |
+| `benchmark` | A Julia dense linear solve on Slurm. | Measurement JSON and the allocation ID are collected with the tested commit. |
 
 The continuation run uses the default branch's integration workflow and verifies the completed pipeline.
 Merge changes to the continuation path before testing them with `handover`.
@@ -264,7 +265,12 @@ The `benchmark-site` artifacts also make generated files available for custom in
 The benchmark caller runs on pushes to `main`, manual dispatch and Mondays at 06:00 UTC.
 It measures a warmed dense linear solve with 512 unknowns using one Julia thread and one BLAS thread.
 Seven samples and a residual check accompany the median, a second file contains the benchmark action's custom JSON.
-The shared shell runner introduces timing noise, this workload verifies integration rather than enforcing application performance targets.
+Jacamar runs the benchmark on `otus-slurm` with one node, one task, one CPU, 2 GB of memory and a five minute allocation.
+The default scheduler parameters use account `hpc-prf-cobentx`, partition `normal` and QoS `express`.
+Override `BENCHMARK_SCHEDULER_PARAMETERS` in GitLab project variables to change the allocation.
+The job requires `SLURM_JOB_ID` and saves it with the measurements, the integration verifier checks the collected allocation ID.
+The GitLab job timeout is seven days to allow queueing, the runner must permit that timeout.
+This small workload verifies integration rather than enforcing application performance targets.
 The example uses permissive thresholds, applications should configure thresholds for their allocated hardware.
 The GitLab job loads `lang/JuliaHPC/1.10.12-foss-2025a`, override `BENCHMARK_JULIA_MODULE` if needed.
 
@@ -285,14 +291,15 @@ Configure these settings in this repository to enable the live PR integration te
 
 The account can be your existing organization member account, no separate bot account is required.
 Approve the token in the organization if its policy requires approval.
-Enable Allow GitHub Actions to create and approve pull requests under Settings, Actions, General.
-The automatic workflow token creates test branches and draft PRs, the supplied token only posts `/hpc`.
+The automatic workflow token creates test branches and handles cleanup, the supplied token creates draft PRs and posts `/hpc`.
+Creating PRs with the supplied token allows their checks to run without the approval required for PRs created with the automatic token.
 Comments posted with the automatic token cannot trigger the comment workflow.
 The configured test actor is authorized only for generated PRs changing the controlled fixture.
 Regular maintainer authorization still applies to other PRs.
 
 On main pushes, manual runs and the weekly schedule, the integration suite records a baseline on `hpc-test-results`.
 It creates passing and failing draft PRs, posts the command and verifies continuation, PR comments and checks on the selected commits.
+The PR jobs wait three minutes to exercise continuation after one minute, baseline creation has no deliberate delay.
 It reruns reporting to verify that comments are updated and the baseline remains unchanged.
 An always running cleanup step closes the PRs and removes their GitHub branches without merging them.
 A canceled or interrupted run can leave resources behind, their names contain the originating run ID.

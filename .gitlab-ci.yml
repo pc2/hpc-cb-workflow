@@ -14,6 +14,8 @@ variables:
   INTEGRATION_RUNNER_TAG: otus-shell
   GIT_DEPTH: "1"
   BENCHMARK_JULIA_MODULE: lang/JuliaHPC/1.10.12-foss-2025a
+  BENCHMARK_RUNNER_TAG: otus-slurm
+  BENCHMARK_SCHEDULER_PARAMETERS: "-A hpc-prf-cobentx -q express -p normal -N 1 -n 1 -c 1 --mem=2G -t 00:05:00"
 
 default:
   tags: [$INTEGRATION_RUNNER_TAG]
@@ -42,7 +44,7 @@ slow:
   script:
     - mkdir -p results
     - printf '%s\n' "$CI_COMMIT_SHA" > results/commit.txt
-    - sleep 300
+    - sleep 180
     - |
       if [ "$SCENARIO" = handover_failure ]; then
         mkdir -p results
@@ -55,9 +57,17 @@ slow:
     expire_in: 1 day
 
 benchmark:
+  tags: [$BENCHMARK_RUNNER_TAG]
+  timeout: 7 days
+  variables:
+    SCHEDULER_PARAMETERS: $BENCHMARK_SCHEDULER_PARAMETERS
+    JACAMAR_SCHEDULER_JOB_PREFIX: cb-benchmark
   rules:
     - if: $SCENARIO == "benchmark"
   script:
+    - ': "${SLURM_JOB_ID:?The benchmark requires a Slurm allocation.}"'
+    - mkdir -p results
+    - printf '%s\n' "$SLURM_JOB_ID" > results/slurm-job-id.txt
     - module load "$BENCHMARK_JULIA_MODULE"
     - julia --startup-file=no --threads=1 benchmarks/linear_solve.jl
   artifacts:
@@ -70,7 +80,7 @@ regression:
   script:
     - mkdir -p results
     - cp benchmarks/pr-fixture.json results/benchmark-action.json
-    - if [ "${HANDOVER:-false}" = true ]; then sleep 300; fi
+    - if [ "${HANDOVER:-false}" = true ]; then sleep 180; fi
   artifacts:
     paths: [results/]
     expire_in: 30 days
