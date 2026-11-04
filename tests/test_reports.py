@@ -16,15 +16,20 @@ class IntegrationResultTests(unittest.TestCase):
     def record(self, collected=True):
         return dict(scenario='handover_failure', sha='a' * 40, context_run_id=10,
                     pipeline_id=20, collected=collected, next_run_id=0 if collected else 11,
-                    result='failure' if collected else 'success')
+                    result='success', pipeline_status='failed' if collected else '')
 
     def test_expected_failure_requires_a_verified_matching_pipeline(self):
         record = self.record()
-        integration_suite.validate_result(record, 'handover_failure', 'a' * 40, 10, 20, 'failure')
+        integration_suite.validate_result(record, 'handover_failure', 'a' * 40, 10, 20, 'success')
         for key, value in [('pipeline_id', 21), ('context_run_id', 12), ('sha', 'b' * 40),
-                           ('scenario', 'success'), ('result', 'success'), ('next_run_id', 11)]:
+                           ('scenario', 'success'), ('result', 'failure'), ('next_run_id', 11),
+                           ('pipeline_status', 'success'), ('pipeline_status', 'canceled')]:
             with self.subTest(key=key), self.assertRaises(ValueError):
-                integration_suite.validate_result(record | {key: value}, 'handover_failure', 'a' * 40, 10, 20, 'failure')
+                integration_suite.validate_result(record | {key: value}, 'handover_failure', 'a' * 40, 10, 20, 'success')
+
+    def test_failed_github_run_is_rejected_even_when_gitlab_failure_is_expected(self):
+        with self.assertRaises(ValueError):
+            integration_suite.validate_result(self.record(), 'handover_failure', 'a' * 40, 10, 20, 'failure')
 
     def test_handover_requires_another_run(self):
         record = self.record(False)
@@ -44,7 +49,7 @@ class IntegrationResultTests(unittest.TestCase):
                 return {'workflow_run_id': 10}
             run_id = int(path.rsplit('/', 1)[-1])
             return dict(status='completed', head_sha='a' * 40,
-                        conclusion='success' if run_id == 10 else 'failure', html_url=f'https://example/{run_id}')
+                        conclusion='success', html_url=f'https://example/{run_id}')
 
         def fake_artifact(repo, run_id, name):
             stream = io.BytesIO()
@@ -64,7 +69,8 @@ class IntegrationResultTests(unittest.TestCase):
                 result = integration_suite.run_scenario('example/project', 'main', 'a' * 40, 'handover_failure', output)
             self.assertEqual(result['run_id'], 11)
             self.assertEqual(result['pipeline_id'], 20)
-            self.assertEqual(json.loads(output.read_text())['result'], 'failure')
+            self.assertEqual(json.loads(output.read_text())['result'], 'success')
+            self.assertEqual(json.loads(output.read_text())['pipeline_status'], 'failed')
 
 
 class BenchmarkReportTests(unittest.TestCase):

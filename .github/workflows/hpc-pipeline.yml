@@ -32,6 +32,10 @@ on:
         description: Optional JSON containing publication settings and benchmark suites.
         type: string
         default: '{}'
+      expected_pipeline_status:
+        description: The required terminal status, failed is reserved for deliberate failure tests.
+        type: string
+        default: success
       max_wait_minutes:
         description: Minutes one run monitors before continuing in another run, at most 330.
         type: string
@@ -41,6 +45,10 @@ on:
         required: true
       GITLAB_TRIGGER_TOKEN:
         required: false
+    outputs:
+      pipeline_status:
+        description: The verified terminal GitLab status, empty until collection runs.
+        value: ${{ jobs.collect.outputs.pipeline_status }}
 
 permissions:
   contents: write
@@ -76,6 +84,7 @@ jobs:
           PR: ${{ inputs.pull_request }}
           SELECTED_SHA: ${{ inputs.source_sha }}
           BENCHMARK: ${{ inputs.benchmark }}
+          EXPECTED_PIPELINE_STATUS: ${{ inputs.expected_pipeline_status }}
         run: |
           set -euo pipefail
           : "${GITLAB_TOKEN:?Configure the GITLAB_TOKEN repository secret.}"
@@ -85,6 +94,7 @@ jobs:
           [[ -z $PR || $PR =~ ^[1-9][0-9]*$ ]]
           [[ -z $SELECTED_SHA || ( -n $PR && $SELECTED_SHA =~ ^[0-9a-f]{40}$ ) ]]
           jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK"
+          [[ $EXPECTED_PIPELINE_STATUS == success || $EXPECTED_PIPELINE_STATUS == failed ]]
       - name: Verify PR commit
         if: inputs.pull_request != ''
         shell: bash
@@ -131,6 +141,7 @@ jobs:
           SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
           SOURCE_REF: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
           BENCHMARK: ${{ inputs.benchmark }}
+          EXPECTED_PIPELINE_STATUS: ${{ inputs.expected_pipeline_status }}
         run: |
           set -euo pipefail
           [[ $PIPELINE_ID =~ ^[1-9][0-9]*$ ]]
@@ -144,13 +155,14 @@ jobs:
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           mkdir -p "$RUNNER_TEMP/hpc-context"
           jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK"
-          jq -n --argjson benchmark "$BENCHMARK" --arg workflow_sha "$GITHUB_SHA" --arg workflow_ref "$GITHUB_REF_NAME" \
+          jq -n --argjson benchmark "$BENCHMARK" --arg expected_status "$EXPECTED_PIPELINE_STATUS" \
+            --arg workflow_sha "$GITHUB_SHA" --arg workflow_ref "$GITHUB_REF_NAME" \
             --arg repository "$GITHUB_REPOSITORY" --arg hostname "$GITLAB_HOSTNAME" \
             --arg sha "$SOURCE_SHA" --arg ref "$SOURCE_REF" --arg pr "$PR" \
             --argjson run "$GITHUB_RUN_ID" --argjson workflow "$workflow_id" \
             --argjson project "$GITLAB_PROJECT_ID" --argjson pipeline "$PIPELINE_ID" \
             --argjson started "$(date +%s)" \
-            '{schema: 1, benchmark: $benchmark, workflow_sha: $workflow_sha, workflow_ref: $workflow_ref, repository: $repository, hostname: $hostname, project_id: $project,
+            '{schema: 1, expected_pipeline_status: $expected_status, benchmark: $benchmark, workflow_sha: $workflow_sha, workflow_ref: $workflow_ref, repository: $repository, hostname: $hostname, project_id: $project,
               pipeline_id: $pipeline, sha: $sha, ref: $ref, pull_request: $pr,
               run_id: $run, workflow_id: $workflow, started_at: $started}' \
             > "$RUNNER_TEMP/hpc-context/context.json"
@@ -189,6 +201,7 @@ jobs:
       finished: ${{ steps.poll.outputs.finished }}
       benchmark: ${{ steps.identity.outputs.benchmark }}
       suites: ${{ steps.identity.outputs.suites }}
+      expected_pipeline_status: ${{ steps.identity.outputs.expected_pipeline_status }}
     steps:
       - name: Verify context source
         id: origin
@@ -239,6 +252,7 @@ jobs:
               and (.workflow_sha // .sha) == $sha and (.sha | test("^[0-9a-f]{40}$")) and (.workflow_ref // .ref) == $ref
               and (.pipeline_id | type == "number" and . > 0 and floor == .)
               and (.pull_request | test("^([1-9][0-9]*)?$"))
+              and ((if has("expected_pipeline_status") then .expected_pipeline_status else "success" end) | IN("success", "failed"))
               and (.started_at | type == "number" and . > 0 and floor == .)' "$context"
           pipeline_id=$(jq -r .pipeline_id "$context")
           ORIGIN_SHA=$(jq -r .sha "$context")
@@ -251,6 +265,7 @@ jobs:
             '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
               and .source == "trigger"' <<< "$pipeline"
           {
+            printf 'expected_pipeline_status=%s\n' "$(jq -r '.expected_pipeline_status // "success"' "$context")"
             printf 'benchmark=%s\nsuites=%s\n' "$(jq -c '.benchmark // {}' "$context")" "$(jq -c '.benchmark.suites // []' "$context")"
             printf 'pipeline_id=%s\nsha=%s\n' "$pipeline_id" "$ORIGIN_SHA"
             printf 'ref=%s\n' "$ORIGIN_REF"
@@ -309,6 +324,8 @@ jobs:
     if: ${{ !cancelled() && needs.wait.outputs.finished == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      pipeline_status: ${{ steps.identity.outputs.status }}
     permissions:
       contents: read
       pull-requests: write
@@ -410,12 +427,16 @@ jobs:
           STATUS: ${{ steps.identity.outputs.status }}
           DOWNLOAD_OUTCOME: ${{ steps.artifacts.outcome }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+          EXPECTED_PIPELINE_STATUS: ${{ needs.wait.outputs.expected_pipeline_status }}
         run: |
-          [[ $STATUS == success && $DOWNLOAD_OUTCOME == success && $UPLOAD_OUTCOME == success ]]
+          set -euo pipefail
+          [[ $EXPECTED_PIPELINE_STATUS == success || $EXPECTED_PIPELINE_STATUS == failed ]]
+          printf 'GitLab pipeline status %s, expected %s.\n' "$STATUS" "$EXPECTED_PIPELINE_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          [[ $STATUS == "$EXPECTED_PIPELINE_STATUS" && $DOWNLOAD_OUTCOME == success && $UPLOAD_OUTCOME == success ]]
 
   benchmark:
     needs: [wait, collect]
-    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.wait.outputs.suites != '[]' && needs.wait.outputs.suites != '' }}
+    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.collect.outputs.pipeline_status == 'success' && needs.wait.outputs.suites != '[]' && needs.wait.outputs.suites != '' }}
     strategy:
       fail-fast: false
       max-parallel: 1

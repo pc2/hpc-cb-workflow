@@ -48,6 +48,9 @@ assert caller['jobs']['hpc']['if'] == "vars.GITLAB_PROJECT_ID != ''"
 assert caller['jobs']['hpc']['uses'].endswith('@REVIEWED_COMMIT')
 assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['required'] == 'false'
 assert workflow['on']['workflow_call']['inputs']['max_wait_minutes']['default'] == '330'
+assert workflow['on']['workflow_call']['inputs']['expected_pipeline_status']['default'] == 'success'
+assert workflow['on']['workflow_call']['outputs']['pipeline_status']['value'] == '${{ jobs.collect.outputs.pipeline_status }}'
+assert jobs['benchmark']['if'].find("needs.collect.outputs.pipeline_status == 'success'") >= 0
 
 
 def test_integration_suite_covers_all_scenarios_and_verifies_without_write_access():
@@ -317,6 +320,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         'PR_RESPONSE': str(pr_file), 'COMMENTS_RESPONSE': str(comments_file),
         'STARTED_AT': '100', 'DOWNLOAD_OUTCOME': 'success', 'UPLOAD_OUTCOME': 'success',
         'STATUS': 'success', 'WEB_URL': 'https://git.example/pipelines/123',
+        'EXPECTED_PIPELINE_STATUS': 'success',
         'GITHUB_OUTPUT': str(output), 'GITHUB_STEP_SUMMARY': str(summary),
         'RESUME_ID': '', 'RESUME_SHA': '', 'PIPELINE_ID': '123', 'EXPECTED_SHA': 'a' * 40,
         'POLL_TIMEOUT': '0', 'MAX_WAIT_MINUTES': '0', 'CHECK_RUNS': 'true', 'SUMMARY': 'true',
@@ -377,6 +381,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     context = json.loads(context_file.read_text())
     assert context['pipeline_id'] == 123 and context['sha'] == 'a' * 40
     assert context['pull_request'] == '7' and context['run_id'] == 900
+    assert context['expected_pipeline_status'] == 'success'
     assert not any('token' in key.lower() for key in context)
 
     verify_origin = by_name['Verify context source']['run']
@@ -407,6 +412,21 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
                           'GITHUB_REF_NAME': 'other', 'GITLAB_TRIGGER_TOKEN': '',
                           'PR': '8'}).returncode == 0
     assert 'pull_request=7' in output.read_text()
+    def test_expected_status_is_preserved_across_continuation_and_defaults_for_older_contexts():
+        saved = run(by_name['Save pipeline context']['run'], {'EXPECTED_PIPELINE_STATUS': 'failed'})
+        assert saved.returncode == 0, saved.stderr
+        assert json.loads(context_file.read_text())['expected_pipeline_status'] == 'failed'
+        assert run(identity, {'EXPECTED_PIPELINE_STATUS': 'success', 'GITHUB_RUN_ID': '901'}).returncode == 0
+        assert 'expected_pipeline_status=failed' in output.read_text()
+        legacy = {key: value for key, value in context.items() if key != 'expected_pipeline_status'}
+        context_file.write_text(json.dumps(legacy))
+        assert run(identity, {'EXPECTED_PIPELINE_STATUS': 'failed'}).returncode == 0
+        assert 'expected_pipeline_status=success' in output.read_text()
+        for invalid in ('canceled', '', True, False, None):
+            context_file.write_text(json.dumps(context | {'expected_pipeline_status': invalid}))
+            assert run(identity).returncode != 0
+        context_file.write_text(json.dumps(context))
+    test_expected_status_is_preserved_across_continuation_and_defaults_for_older_contexts()
     selected = context | {'sha': 'b' * 40, 'ref': 'hpc-pr-7-' + 'b' * 40,
                           'benchmark': {'mode': 'compare', 'suites': [{'name': 'CPU'}]}}
     context_file.write_text(json.dumps(selected))
@@ -493,6 +513,25 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     for overrides in ({'STATUS': 'failed'}, {'STATUS': 'canceled'},
                       {'DOWNLOAD_OUTCOME': 'failure'}, {'UPLOAD_OUTCOME': 'failure'}):
         assert run(final, overrides).returncode != 0, overrides
+    def test_expected_failure_does_not_hide_artifact_errors_or_unexpected_success():
+        expected_failure = {'STATUS': 'failed', 'EXPECTED_PIPELINE_STATUS': 'failed'}
+        assert run(final, expected_failure).returncode == 0
+        for override in ({'STATUS': 'success'}, {'STATUS': 'canceled'}, {'STATUS': 'skipped'},
+                         {'DOWNLOAD_OUTCOME': 'failure'}, {'UPLOAD_OUTCOME': 'failure'},
+                         {'EXPECTED_PIPELINE_STATUS': 'canceled'}):
+            assert run(final, expected_failure | override).returncode != 0, override
+    test_expected_failure_does_not_hide_artifact_errors_or_unexpected_success()
+    def test_integration_verifies_the_raw_pipeline_status_and_requires_a_successful_workflow():
+        verify = next(step['run'] for step in integration['jobs']['verify']['steps']
+                      if step.get('name') == 'Verify the GitHub result')
+        expected = {'SCENARIO': 'handover_failure', 'COLLECTED': 'true',
+                    'HPC_RESULT': 'success', 'PIPELINE_STATUS': 'failed'}
+        assert run(verify, expected).returncode == 0
+        for override in ({'HPC_RESULT': 'failure'}, {'PIPELINE_STATUS': 'success'},
+                         {'PIPELINE_STATUS': ''}):
+            assert run(verify, expected | override).returncode != 0
+        assert run(verify, expected | {'COLLECTED': 'false', 'PIPELINE_STATUS': ''}).returncode == 0
+    test_integration_verifies_the_raw_pipeline_status_and_requires_a_successful_workflow()
     result_check = by_name['Verify monitoring result']['run']
     assert run(result_check, {'FINISHED': ''}).returncode != 0
     assert run(result_check, {'FINISHED': 'false'}).returncode == 0

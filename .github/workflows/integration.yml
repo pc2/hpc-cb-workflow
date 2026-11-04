@@ -47,6 +47,7 @@ jobs:
       context_run_id: ${{ inputs.context_run_id }}
       pull_request: ${{ inputs.pull_request }}
       max_wait_minutes: ${{ startsWith(inputs.scenario, 'handover') && inputs.context_run_id == '' && '1' || '330' }}
+      expected_pipeline_status: ${{ (inputs.scenario == 'failure' || inputs.scenario == 'handover_failure') && 'failed' || 'success' }}
       pipeline_variables: |
         EXPECTED_COMMIT_SHA=${{ github.sha }}
         SCENARIO=${{ inputs.scenario || 'success' }}
@@ -71,6 +72,7 @@ jobs:
       CONTEXT_RUN_ID: ${{ inputs.context_run_id || github.run_id }}
       CONTINUATION: ${{ inputs.context_run_id != '' }}
       HPC_RESULT: ${{ needs.hpc.result }}
+      PIPELINE_STATUS: ${{ needs.hpc.outputs.pipeline_status }}
     steps:
       - name: Download pipeline context
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # Use version 8.0.2.
@@ -141,11 +143,16 @@ jobs:
           COLLECTED: ${{ steps.pipeline.outputs.collected }}
         run: |
           set -euo pipefail
-          expected=success
-          if [[ ( $SCENARIO == failure || $SCENARIO == handover_failure ) && $COLLECTED == true ]]; then
-            expected=failure
+          [[ $HPC_RESULT == success ]]
+          if [[ $COLLECTED == true ]]; then
+            expected=success
+            if [[ $SCENARIO == failure || $SCENARIO == handover_failure ]]; then
+              expected=failed
+            fi
+            [[ $PIPELINE_STATUS == "$expected" ]]
+          else
+            [[ -z $PIPELINE_STATUS ]]
           fi
-          [[ $HPC_RESULT == "$expected" ]]
       - name: Verify check runs
         shell: bash
         env:
@@ -245,9 +252,10 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/integration-result"
           jq -n --arg scenario "$SCENARIO" --arg sha "$SHA" --arg result "$HPC_RESULT" \
+            --arg status "$PIPELINE_STATUS" \
             --argjson pipeline "$PIPELINE_ID" --argjson origin "$CONTEXT_RUN_ID" \
             --argjson collected "$COLLECTED" --argjson next "$NEXT_RUN_ID" \
-            '{scenario: $scenario, sha: $sha, result: $result, pipeline_id: $pipeline,
+            '{scenario: $scenario, sha: $sha, result: $result, pipeline_status: $status, pipeline_id: $pipeline,
               context_run_id: $origin, collected: $collected, next_run_id: $next}' \
             > "$RUNNER_TEMP/integration-result/result.json"
       - name: Upload verified result

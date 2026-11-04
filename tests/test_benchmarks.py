@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -15,6 +16,35 @@ import pr_integration
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_api_failures_include_github_validation_details_without_credentials(self):
+        cases = [
+            ('gh: Resource not accessible by personal access token (HTTP 403)',
+             {'message': 'Resource not accessible by personal access token'}),
+            ('gh: Validation Failed (HTTP 422)',
+             {'message': 'Validation Failed', 'errors': [{'field': 'head', 'code': 'invalid'}]}),
+        ]
+        env = dict(GH_TOKEN='automatic-secret', CB_TEST_TOKEN='personal-secret')
+        for stderr, body in cases:
+            result = subprocess.CompletedProcess([], 1, json.dumps(body),
+                                                 stderr + '\nautomatic-secret personal-secret')
+            with self.subTest(body=body), patch.dict(os.environ, env), \
+                 patch.object(pr_integration.subprocess, 'run', return_value=result):
+                with self.assertRaises(RuntimeError) as error:
+                    pr_integration.api('repos/pc2/test/pulls', {'head': 'fixture'}, token='personal-secret')
+                message = str(error.exception)
+                self.assertIn('POST repos/pc2/test/pulls', message)
+                self.assertIn(stderr, message)
+                self.assertIn(json.dumps(body), message)
+                self.assertNotIn('automatic-secret', message)
+                self.assertNotIn('personal-secret', message)
+
+    def test_api_success_preserves_json_and_empty_responses(self):
+        for response, expected in [(' {"number": 7}', {'number': 7}), ('', None)]:
+            with self.subTest(response=response), patch.dict(os.environ, {'GH_TOKEN': 'test-token'}), \
+                 patch.object(pr_integration.subprocess, 'run',
+                              return_value=subprocess.CompletedProcess([], 0, response, '')):
+                self.assertEqual(pr_integration.api('repos/pc2/test/pulls'), expected)
+
     def test_custom_measurements_reject_duplicate_names_and_invalid_values(self):
         measurement = dict(name='solve', unit='seconds', value=1)
         self.assertEqual(benchmark.validate_results([measurement]), [measurement])

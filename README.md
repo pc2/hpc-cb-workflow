@@ -98,6 +98,7 @@ workflow:
 | `pull_request` | An optional PR whose head is the selected commit. |
 | `source_sha` | A reviewed PR head commit, verified against `pull_request`. |
 | `benchmark` | Optional publication configuration and suites as JSON. |
+| `expected_pipeline_status` | The required terminal status, defaults to `success`, deliberate failure tests can require `failed`. |
 | `max_wait_minutes` | Minutes one run monitors before continuing in another run, at most 330. |
 
 ## Monitoring and results
@@ -136,6 +137,11 @@ Collect runs when the pipeline finishes, including after test failures.
 It uploads artifacts to GitHub with a retention of thirty days.
 Context artifacts have the same retention and contain no credentials.
 Collection fails when the pipeline fails or its artifacts are unavailable.
+Deliberate failure tests can set `expected_pipeline_status` to `failed`, collection then requires that exact status and successful artifact transfers.
+Unexpected success, cancellation and infrastructure errors still fail the workflow.
+The original context preserves this expectation across continuation and retries, older contexts retain the default success requirement.
+The `pipeline_status` output exposes the verified GitLab status and remains empty before collection.
+Benchmark publication still requires a successful GitLab pipeline.
 For PR runs, one bot comment per pipeline reports the tested commit and result.
 The comment includes artifact outcomes and links to GitLab and GitHub.
 Repeated collection updates that comment.
@@ -195,17 +201,18 @@ Maintainers can also dispatch the suite or an individual scenario.
 The suite starts separate runs and follows each continuation to completion.
 It checks the saved report, pipeline identity and verification job outcome.
 Expected failures pass the suite only when all verification checks pass.
-The child runs remain red when they deliberately test a failed pipeline.
-Use the suite checks for branch protection rather than the deliberate failures.
+The deliberate pipeline failure cases set `expected_pipeline_status` to `failed`, their child runs pass when the failure and artifacts are verified.
+GitLab pipelines and their mirrored job checks retain the actual failure status.
+Use the suite checks for branch protection rather than the deliberate failure checks.
 The `verify` job reads the context artifact and compares GitLab and GitHub state.
 It checks the pipeline commit, trigger variables, job results, check runs, collected archives and the PR comment.
 
 | Scenario | Pipeline | Verified behavior |
 | --- | --- | --- |
 | `success` | One job with an artifact. | Collection, check runs and the PR comment. |
-| `failure` | One failing job. | Artifacts are collected and the `hpc` job fails, the run is red by design. |
+| `failure` | One failing job. | The failed pipeline status and artifacts are verified, the test workflow passes. |
 | `handover` | One job sleeping three minutes. | Monitoring stops after one minute and dispatches a continuation run. |
-| `handover_failure` | A job sleeps three minutes, writes an artifact and fails. | Continuation reports failure and collects the failed job's artifact. |
+| `handover_failure` | A job sleeps three minutes, writes an artifact and fails. | Continuation verifies the expected failure and artifacts, the test workflow passes. |
 | `benchmark` | A Julia dense linear solve on Slurm. | Measurement JSON and the allocation ID are collected with the tested commit. |
 
 The continuation run uses the default branch's integration workflow and verifies the completed pipeline.

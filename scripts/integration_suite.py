@@ -46,8 +46,10 @@ def validate_result(record, scenario, sha, origin, pipeline, conclusion):
         raise ValueError('Invalid pipeline ID.')
     if type(record['collected']) is not bool:
         raise ValueError('Invalid collection state.')
-    expected = 'failure' if record['collected'] and scenario in ('failure', 'handover_failure') else 'success'
-    if record['result'] != expected or conclusion != expected:
+    expected_status = ''
+    if record['collected']:
+        expected_status = 'failed' if scenario in ('failure', 'handover_failure') else 'success'
+    if record['result'] != 'success' or conclusion != 'success' or record['pipeline_status'] != expected_status:
         raise ValueError('The run did not have the expected outcome.')
     if record['collected']:
         if record['next_run_id'] != 0:
