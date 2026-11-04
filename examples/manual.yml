@@ -13,10 +13,12 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write
   checks: write
   actions: write
   pull-requests: write
+  pages: write
+  id-token: write
 
 jobs:
   hpc:

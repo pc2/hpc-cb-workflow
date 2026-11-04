@@ -13,6 +13,7 @@ workflow:
 variables:
   INTEGRATION_RUNNER_TAG: otus-shell
   GIT_DEPTH: "1"
+  BENCHMARK_JULIA_MODULE: lang/JuliaHPC/1.10.12-foss-2025a
 
 default:
   tags: [$INTEGRATION_RUNNER_TAG]
@@ -37,6 +38,39 @@ fail:
 # Outlasts the one minute monitoring deadline of the handover scenario.
 slow:
   rules:
-    - if: $SCENARIO == "handover"
+    - if: $SCENARIO == "handover" || $SCENARIO == "handover_failure"
   script:
+    - mkdir -p results
+    - printf '%s\n' "$CI_COMMIT_SHA" > results/commit.txt
     - sleep 300
+    - |
+      if [ "$SCENARIO" = handover_failure ]; then
+        mkdir -p results
+        printf '%s\n' "$CI_COMMIT_SHA" > results/failure.txt
+        exit 1
+      fi
+  artifacts:
+    when: always
+    paths: [results/]
+    expire_in: 1 day
+
+benchmark:
+  rules:
+    - if: $SCENARIO == "benchmark"
+  script:
+    - module load "$BENCHMARK_JULIA_MODULE"
+    - julia --startup-file=no --threads=1 benchmarks/linear_solve.jl
+  artifacts:
+    paths: [results/]
+    expire_in: 30 days
+
+regression:
+  rules:
+    - if: $SCENARIO == "regression"
+  script:
+    - mkdir -p results
+    - cp benchmarks/pr-fixture.json results/benchmark-action.json
+    - if [ "${HANDOVER:-false}" = true ]; then sleep 300; fi
+  artifacts:
+    paths: [results/]
+    expire_in: 30 days

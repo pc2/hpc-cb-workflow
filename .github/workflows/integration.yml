@@ -6,16 +6,15 @@
 # The mirrored commit is this repository, its .gitlab-ci.yml defines the jobs.
 
 name: Integration
+run-name: ${{ inputs.context_run_id != '' && format('Integration resume {0}', inputs.context_run_id) || format('Integration {0}', inputs.scenario) }}
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
       scenario:
         description: The pipeline outcome to verify.
         type: choice
-        options: [success, failure, handover]
+        options: [success, failure, handover, handover_failure, benchmark]
         default: success
       pull_request:
         description: An optional PR whose head is the selected commit.
@@ -25,17 +24,17 @@ on:
         description: The original GitHub run, set by automatic continuation.
         type: string
         default: ''
-  schedule:
-    - cron: '0 4 * * 1'
 
 permissions:
-  contents: read
+  contents: write
   checks: write
   actions: write
   pull-requests: write
+  pages: write
+  id-token: write
 
 concurrency:
-  group: integration-${{ github.ref }}
+  group: integration-${{ inputs.context_run_id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
@@ -47,7 +46,7 @@ jobs:
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
       context_run_id: ${{ inputs.context_run_id }}
       pull_request: ${{ inputs.pull_request }}
-      max_wait_minutes: ${{ inputs.scenario == 'handover' && '1' || '330' }}
+      max_wait_minutes: ${{ startsWith(inputs.scenario, 'handover') && inputs.context_run_id == '' && '1' || '330' }}
       pipeline_variables: |
         EXPECTED_COMMIT_SHA=${{ github.sha }}
         SCENARIO=${{ inputs.scenario || 'success' }}
@@ -104,17 +103,17 @@ jobs:
           variables=$(gitlab "$api/variables")
           jq -e --arg sha "$sha" 'any(.[]; .key == "EXPECTED_COMMIT_SHA" and .value == $sha)' <<< "$variables"
           scenario=$(jq -er '.[] | select(.key == "SCENARIO") | .value' <<< "$variables")
-          [[ $scenario =~ ^(success|failure|handover)$ ]]
+          [[ $scenario =~ ^(success|failure|handover|handover_failure|benchmark)$ ]]
           if [[ $CONTINUATION != true ]]; then
             [[ $scenario == "$INPUT_SCENARIO" ]]
           fi
           # The first run of a handover ends before the pipeline, every other run collects results.
           collected=true
-          if [[ $scenario == handover && $CONTINUATION != true ]]; then
+          if [[ $scenario == handover* && $CONTINUATION != true ]]; then
             collected=false
           fi
           expected_status=success
-          if [[ $scenario == failure ]]; then
+          if [[ $scenario == failure || $scenario == handover_failure ]]; then
             expected_status=failed
           fi
           status=$(jq -r .status <<< "$pipeline")
@@ -126,7 +125,8 @@ jobs:
           fi
           case $scenario in
             failure) jq -e 'any(.[]; .name == "fail")' <<< "$jobs" ;;
-            handover) jq -e 'any(.[]; .name == "slow")' <<< "$jobs" ;;
+            handover*) jq -e 'any(.[]; .name == "slow")' <<< "$jobs" ;;
+            benchmark) jq -e 'any(.[]; .name == "benchmark" and .status == "success")' <<< "$jobs" ;;
           esac
           {
             printf 'pipeline_id=%s\nsha=%s\nscenario=%s\n' "$pipeline_id" "$sha" "$scenario"
@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           expected=success
-          if [[ $SCENARIO == failure && $COLLECTED == true ]]; then
+          if [[ ( $SCENARIO == failure || $SCENARIO == handover_failure ) && $COLLECTED == true ]]; then
             expected=failure
           fi
           [[ $HPC_RESULT == "$expected" ]]
@@ -169,6 +169,7 @@ jobs:
               'any(.[]; .name == $name and .status == "completed" and .conclusion == $conclusion)' <<< "$checks"
           fi
       - name: Verify the continuation run
+        id: continuation
         if: steps.pipeline.outputs.collected == 'false'
         shell: bash
         env:
@@ -178,8 +179,11 @@ jobs:
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
           for attempt in $(seq 1 12); do
-            if gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=workflow_dispatch&branch=$default_branch&per_page=20" |
-              jq -e --argjson run "$GITHUB_RUN_ID" 'any(.workflow_runs[]; .id > $run)'; then
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=workflow_dispatch&branch=$default_branch&per_page=100")
+            next_run=$(jq -r --arg title "Integration resume $CONTEXT_RUN_ID" --argjson run "$GITHUB_RUN_ID" \
+              '[.workflow_runs[] | select(.id > $run and .display_title == $title)] | min_by(.id).id // empty' <<< "$runs")
+            if [[ -n $next_run ]]; then
+              printf 'run_id=%s\n' "$next_run" >> "$GITHUB_OUTPUT"
               echo 'A continuation run monitors the pipeline on the default branch.' >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
@@ -198,10 +202,19 @@ jobs:
         shell: bash
         env:
           SHA: ${{ steps.pipeline.outputs.sha }}
+          SCENARIO: ${{ steps.pipeline.outputs.scenario }}
         run: |
           set -euo pipefail
           ls -l "$RUNNER_TEMP/collected"
           [[ $(unzip -p "$RUNNER_TEMP/collected/quick.zip" results/commit.txt) == "$SHA" ]]
+          if [[ $SCENARIO == handover_failure ]]; then
+            [[ $(unzip -p "$RUNNER_TEMP/collected/slow.zip" results/failure.txt) == "$SHA" ]]
+          fi
+          if [[ $SCENARIO == benchmark ]]; then
+            unzip -p "$RUNNER_TEMP/collected/benchmark.zip" results/benchmark.json |
+              jq -e --arg sha "$SHA" '.schema == 1 and .sha == $sha and .unit == "seconds"
+                and (.value | type == "number" and . > 0) and .threads == 1 and .blas_threads == 1'
+          fi
       - name: Verify the PR comment
         if: steps.pipeline.outputs.collected == 'true' && steps.pipeline.outputs.pull_request != ''
         shell: bash
@@ -218,3 +231,27 @@ jobs:
             jq -se --arg marker "$marker" --arg sha "$SHA" --arg status "**$STATUS**" \
               '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith($marker)))]
                 | length == 1 and (.[0].body | contains($sha) and contains($status))'
+      - name: Save verified result
+        shell: bash
+        env:
+          PIPELINE_ID: ${{ steps.pipeline.outputs.pipeline_id }}
+          SHA: ${{ steps.pipeline.outputs.sha }}
+          SCENARIO: ${{ steps.pipeline.outputs.scenario }}
+          COLLECTED: ${{ steps.pipeline.outputs.collected }}
+          NEXT_RUN_ID: ${{ steps.continuation.outputs.run_id || '0' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/integration-result"
+          jq -n --arg scenario "$SCENARIO" --arg sha "$SHA" --arg result "$HPC_RESULT" \
+            --argjson pipeline "$PIPELINE_ID" --argjson origin "$CONTEXT_RUN_ID" \
+            --argjson collected "$COLLECTED" --argjson next "$NEXT_RUN_ID" \
+            '{scenario: $scenario, sha: $sha, result: $result, pipeline_id: $pipeline,
+              context_run_id: $origin, collected: $collected, next_run_id: $next}' \
+            > "$RUNNER_TEMP/integration-result/result.json"
+      - name: Upload verified result
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: integration-result
+          path: ${{ runner.temp }}/integration-result/result.json
+          overwrite: true
+          if-no-files-found: error

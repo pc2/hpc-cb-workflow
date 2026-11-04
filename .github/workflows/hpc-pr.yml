@@ -1,0 +1,48 @@
+name: PR benchmark
+run-name: ${{ inputs.context_run_id && format('PR benchmark resume {0}', inputs.context_run_id) || format('PR benchmark {0} {1}', inputs.pull_request, inputs.source_sha) }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: The reviewed pull request.
+        type: string
+        default: ''
+      source_sha:
+        description: The reviewed head commit.
+        type: string
+        default: ''
+      context_run_id:
+        description: The original run to resume.
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  actions: write
+  checks: write
+  pull-requests: write
+  pages: write
+  id-token: write
+
+jobs:
+  hpc:
+    uses: ./.github/workflows/hpc-pipeline.yml
+    with:
+      gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
+      gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
+      pull_request: ${{ inputs.pull_request }}
+      source_sha: ${{ inputs.source_sha }}
+      context_run_id: ${{ inputs.context_run_id }}
+      max_wait_minutes: ${{ inputs.context_run_id == '' && '1' || '330' }}
+      pipeline_variables: |
+        EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
+        SCENARIO=regression
+        HANDOVER=true
+      benchmark: >-
+        {"mode":"history","branch":"hpc-test-results","suites":[
+          {"name":"Regression fixture","archive":"regression.zip",
+           "file":"results/benchmark-action.json","directory":"bench"}]}
+    secrets:
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}

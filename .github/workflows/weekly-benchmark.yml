@@ -1,0 +1,41 @@
+name: Benchmark history
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      context_run_id:
+        description: The original run to resume.
+        type: string
+        default: ''
+  schedule:
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: write
+  actions: write
+  checks: write
+  pull-requests: write
+  pages: write
+  id-token: write
+
+jobs:
+  benchmark:
+    if: vars.GITLAB_PROJECT_ID != ''
+    uses: ./.github/workflows/hpc-pipeline.yml
+    with:
+      gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
+      gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
+      context_run_id: ${{ inputs.context_run_id }}
+      pipeline_variables: |
+        EXPECTED_COMMIT_SHA=${{ github.sha }}
+        SCENARIO=benchmark
+      benchmark: >-
+        {"mode":"pages","branch":"hpc-results","suites":[
+          {"name":"Julia linear solve","archive":"benchmark.zip",
+           "file":"results/benchmark-action.json","directory":"bench",
+           "alert_threshold":"200%","fail_threshold":"1000%"}]}
+    secrets:
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}

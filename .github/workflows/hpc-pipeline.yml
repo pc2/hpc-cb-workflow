@@ -24,6 +24,14 @@ on:
         description: An optional PR whose head is the selected commit.
         type: string
         default: ''
+      source_sha:
+        description: The reviewed PR head commit, used with pull_request.
+        type: string
+        default: ''
+      benchmark:
+        description: Optional JSON containing publication settings and benchmark suites.
+        type: string
+        default: '{}'
       max_wait_minutes:
         description: Minutes one run monitors before continuing in another run, at most 330.
         type: string
@@ -35,10 +43,12 @@ on:
         required: false
 
 permissions:
-  contents: read
+  contents: write
   checks: write
   actions: write
   pull-requests: write
+  pages: write
+  id-token: write
 
 env:
   GITLAB_HOSTNAME: ${{ inputs.gitlab_hostname }}
@@ -64,6 +74,8 @@ jobs:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
           PR: ${{ inputs.pull_request }}
+          SELECTED_SHA: ${{ inputs.source_sha }}
+          BENCHMARK: ${{ inputs.benchmark }}
         run: |
           set -euo pipefail
           : "${GITLAB_TOKEN:?Configure the GITLAB_TOKEN repository secret.}"
@@ -71,39 +83,43 @@ jobs:
           [[ $GITLAB_PROJECT_ID =~ ^[1-9][0-9]*$ ]]
           [[ $GITLAB_HOSTNAME =~ ^[a-zA-Z0-9.-]+$ ]]
           [[ -z $PR || $PR =~ ^[1-9][0-9]*$ ]]
+          [[ -z $SELECTED_SHA || ( -n $PR && $SELECTED_SHA =~ ^[0-9a-f]{40}$ ) ]]
+          jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK"
       - name: Verify PR commit
         if: inputs.pull_request != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.pull_request }}
+          SELECTED_SHA: ${{ inputs.source_sha || github.sha }}
         run: |
           set -euo pipefail
+          [[ $SELECTED_SHA =~ ^[0-9a-f]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" |
-            jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            jq -e --arg sha "$SELECTED_SHA" --arg repo "$GITHUB_REPOSITORY" \
               '.state == "open" and .head.sha == $sha and .base.repo.full_name == $repo'
       - name: Check out the selected commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Use version 7.0.1.
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.source_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Push the selected commit to GitLab
-        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        uses: pc2/github2lab_action@6b33f888c51d2bcafdbe459ca161ae388c58cfc5
         env:
           MODE: mirror
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          MIRROR_SHA: ${{ github.sha }}
-          MIRROR_BRANCH: ${{ github.ref_name }}
+          MIRROR_SHA: ${{ inputs.source_sha || github.sha }}
+          MIRROR_BRANCH: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
           MIRROR_ONLY: 'true'
           FORCE_PUSH: 'true'
       - name: Start GitLab pipeline
         id: trigger
-        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        uses: pc2/github2lab_action@6b33f888c51d2bcafdbe459ca161ae388c58cfc5
         env:
           MODE: trigger
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
-          PIPELINE_REF: ${{ github.ref_name }}
+          PIPELINE_REF: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
           PIPELINE_VARIABLES: ${{ inputs.pipeline_variables }}
       - name: Save pipeline context
         shell: bash
@@ -112,24 +128,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PIPELINE_ID: ${{ steps.trigger.outputs.pipeline_id }}
           PR: ${{ inputs.pull_request }}
+          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
+          SOURCE_REF: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
+          BENCHMARK: ${{ inputs.benchmark }}
         run: |
           set -euo pipefail
           [[ $PIPELINE_ID =~ ^[1-9][0-9]*$ ]]
           pipeline=$(curl --fail --silent --show-error --retry 3 --max-time 60 \
             --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
             "https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$PIPELINE_ID")
-          jq -e --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF_NAME" \
+          jq -e --arg sha "$SOURCE_SHA" --arg ref "$SOURCE_REF" \
             --argjson project "$GITLAB_PROJECT_ID" --argjson id "$PIPELINE_ID" \
             '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
               and .source == "trigger"' <<< "$pipeline"
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           mkdir -p "$RUNNER_TEMP/hpc-context"
-          jq -n --arg repository "$GITHUB_REPOSITORY" --arg hostname "$GITLAB_HOSTNAME" \
-            --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF_NAME" --arg pr "$PR" \
+          jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK"
+          jq -n --argjson benchmark "$BENCHMARK" --arg workflow_sha "$GITHUB_SHA" --arg workflow_ref "$GITHUB_REF_NAME" \
+            --arg repository "$GITHUB_REPOSITORY" --arg hostname "$GITLAB_HOSTNAME" \
+            --arg sha "$SOURCE_SHA" --arg ref "$SOURCE_REF" --arg pr "$PR" \
             --argjson run "$GITHUB_RUN_ID" --argjson workflow "$workflow_id" \
             --argjson project "$GITLAB_PROJECT_ID" --argjson pipeline "$PIPELINE_ID" \
             --argjson started "$(date +%s)" \
-            '{schema: 1, repository: $repository, hostname: $hostname, project_id: $project,
+            '{schema: 1, benchmark: $benchmark, workflow_sha: $workflow_sha, workflow_ref: $workflow_ref, repository: $repository, hostname: $hostname, project_id: $project,
               pipeline_id: $pipeline, sha: $sha, ref: $ref, pull_request: $pr,
               run_id: $run, workflow_id: $workflow, started_at: $started}' \
             > "$RUNNER_TEMP/hpc-context/context.json"
@@ -166,6 +187,8 @@ jobs:
       ref: ${{ steps.identity.outputs.ref }}
       pull_request: ${{ steps.identity.outputs.pull_request }}
       finished: ${{ steps.poll.outputs.finished }}
+      benchmark: ${{ steps.identity.outputs.benchmark }}
+      suites: ${{ steps.identity.outputs.suites }}
     steps:
       - name: Verify context source
         id: origin
@@ -213,11 +236,13 @@ jobs:
             --argjson workflow "$WORKFLOW_ID" \
             '.schema == 1 and .repository == $repo and .hostname == $host
               and .project_id == $project and .run_id == $run and .workflow_id == $workflow
-              and .sha == $sha and (.sha | test("^[0-9a-f]{40}$")) and .ref == $ref
+              and (.workflow_sha // .sha) == $sha and (.sha | test("^[0-9a-f]{40}$")) and (.workflow_ref // .ref) == $ref
               and (.pipeline_id | type == "number" and . > 0 and floor == .)
               and (.pull_request | test("^([1-9][0-9]*)?$"))
               and (.started_at | type == "number" and . > 0 and floor == .)' "$context"
           pipeline_id=$(jq -r .pipeline_id "$context")
+          ORIGIN_SHA=$(jq -r .sha "$context")
+          ORIGIN_REF=$(jq -r .ref "$context")
           pipeline=$(curl --fail --silent --show-error --retry 3 --max-time 60 \
             --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
             "https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$pipeline_id")
@@ -226,6 +251,7 @@ jobs:
             '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
               and .source == "trigger"' <<< "$pipeline"
           {
+            printf 'benchmark=%s\nsuites=%s\n' "$(jq -c '.benchmark // {}' "$context")" "$(jq -c '.benchmark.suites // []' "$context")"
             printf 'pipeline_id=%s\nsha=%s\n' "$pipeline_id" "$ORIGIN_SHA"
             printf 'ref=%s\n' "$ORIGIN_REF"
             printf 'pull_request=%s\nstarted_at=%s\n' "$(jq -r .pull_request "$context")" "$(jq -r .started_at "$context")"
@@ -238,7 +264,7 @@ jobs:
       - name: Follow GitLab jobs
         id: poll
         continue-on-error: true
-        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        uses: pc2/github2lab_action@6b33f888c51d2bcafdbe459ca161ae388c58cfc5
         env:
           MODE: get_status
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -333,7 +359,7 @@ jobs:
           echo "$RUNNER_TEMP/github2lab-python/bin" >> "$GITHUB_PATH"
       - name: Collect GitLab artifacts
         id: artifacts
-        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        uses: pc2/github2lab_action@6b33f888c51d2bcafdbe459ca161ae388c58cfc5
         env:
           MODE: get_artifact
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -386,3 +412,25 @@ jobs:
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           [[ $STATUS == success && $DOWNLOAD_OUTCOME == success && $UPLOAD_OUTCOME == success ]]
+
+  benchmark:
+    needs: [wait, collect]
+    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.wait.outputs.suites != '[]' && needs.wait.outputs.suites != '' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        suite: ${{ fromJSON(needs.wait.outputs.suites) }}
+    uses: ./.github/workflows/benchmark.yml
+    with:
+      context_run_id: ${{ inputs.context_run_id || github.run_id }}
+      artifact: gitlab-${{ inputs.gitlab_project_id }}-${{ needs.wait.outputs.pipeline_id }}
+      config: ${{ needs.wait.outputs.benchmark }}
+      suite: ${{ toJSON(matrix.suite) }}
+
+  pages:
+    needs: [wait, benchmark]
+    if: ${{ !cancelled() && needs.benchmark.result == 'success' && needs.wait.outputs.pull_request == '' && fromJSON(needs.wait.outputs.benchmark).mode == 'pages' }}
+    uses: ./.github/workflows/benchmark-pages.yml
+    with:
+      branch: ${{ fromJSON(needs.wait.outputs.benchmark).branch || 'hpc-results' }}

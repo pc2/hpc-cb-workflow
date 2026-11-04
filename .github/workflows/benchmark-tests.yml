@@ -1,0 +1,71 @@
+name: Benchmark action checks
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  thresholds:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {tool: customSmallerIsBetter, value: 90, expected: success}
+          - {tool: customSmallerIsBetter, value: 120, expected: success}
+          - {tool: customSmallerIsBetter, value: 200, expected: failure}
+          - {tool: customBiggerIsBetter, value: 110, expected: success}
+          - {tool: customBiggerIsBetter, value: 40, expected: failure}
+    steps:
+      - name: Prepare deterministic measurements
+        env:
+          VALUE: ${{ matrix.value }}
+          TOOL: ${{ matrix.tool }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          commit = dict(id='a' * 40, message='Baseline.', timestamp='2026-01-01T00:00:00Z',
+                        url='https://example.invalid/baseline', author=dict(name='Test', username='test'))
+          data = dict(lastUpdate=0, repoUrl='https://example.invalid', entries={'Fixture': [dict(
+              commit=commit, date=0, tool=os.environ['TOOL'],
+              benches=[dict(name='measurement', unit='seconds', value=100)])]})
+          (root / 'history.json').write_text(json.dumps(data))
+          (root / 'input.json').write_text(json.dumps([dict(name='measurement', unit='seconds', value=int(os.environ['VALUE']))]))
+          event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
+          event.pop('pull_request', None)
+          event['head_commit'] = dict(commit, id='b' * 40, message='Candidate.')
+          (root / 'benchmark-event.json').write_text(json.dumps(event))
+          PY
+      - name: Run the pinned benchmark action
+        id: benchmark
+        continue-on-error: true
+        uses: benchmark-action/github-action-benchmark@4322e5726e6334590d251fc4f92bec0efafc45dc
+        env:
+          GITHUB_EVENT_PATH: ${{ runner.temp }}/benchmark-event.json
+        with:
+          name: Fixture
+          tool: ${{ matrix.tool }}
+          output-file-path: ${{ runner.temp }}/input.json
+          external-data-json-path: ${{ runner.temp }}/history.json
+          save-data-file: false
+          summary-always: true
+          alert-threshold: 115%
+          fail-threshold: 150%
+          fail-on-alert: true
+      - name: Verify regression verdict and baseline preservation
+        env:
+          ACTUAL: ${{ steps.benchmark.outcome }}
+          EXPECTED: ${{ matrix.expected }}
+        run: |
+          test "$ACTUAL" = "$EXPECTED"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = json.loads((Path(os.environ['RUNNER_TEMP']) / 'history.json').read_text())
+          assert len(data['entries']['Fixture']) == 1
+          PY

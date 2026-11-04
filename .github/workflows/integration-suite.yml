@@ -1,0 +1,64 @@
+name: Integration suite
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  pull-request:
+    if: vars.GITLAB_PROJECT_ID != '' && vars.CB_TEST_ACTOR != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    concurrency:
+      group: hpc-pr-integration
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+      checks: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Test the PR command and regression reports
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CB_TEST_TOKEN: ${{ secrets.CB_TEST_TOKEN }}
+          CB_TEST_ACTOR: ${{ vars.CB_TEST_ACTOR }}
+        run: python3 scripts/pr_integration.py run --state "$RUNNER_TEMP/pr-test.json"
+      - name: Close test PRs and remove their branches
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/pr_integration.py cleanup --state "$RUNNER_TEMP/pr-test.json"
+  scenarios:
+    if: vars.GITLAB_PROJECT_ID != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        scenario: [success, failure, handover, handover_failure]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run and verify the scenario
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCENARIO: ${{ matrix.scenario }}
+        run: python3 scripts/integration_suite.py --scenario "$SCENARIO" --output "$RUNNER_TEMP/result.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: integration-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/result.json
+          if-no-files-found: error

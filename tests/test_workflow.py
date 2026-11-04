@@ -16,17 +16,19 @@ workflow = yaml.load((root / '.github/workflows/hpc-pipeline.yml').read_text(), 
 caller = yaml.load((root / 'examples/manual.yml').read_text(), Loader=yaml.BaseLoader)
 checks = yaml.load((root / '.github/workflows/test.yml').read_text(), Loader=yaml.BaseLoader)
 integration = yaml.load((root / '.github/workflows/integration.yml').read_text(), Loader=yaml.BaseLoader)
+suite = yaml.load((root / '.github/workflows/integration-suite.yml').read_text(), Loader=yaml.BaseLoader)
+weekly = yaml.load((root / '.github/workflows/weekly-benchmark.yml').read_text(), Loader=yaml.BaseLoader)
 gitlab_ci = yaml.load((root / '.gitlab-ci.yml').read_text(), Loader=yaml.BaseLoader)
 jobs = workflow['jobs']
-assert set(jobs) == {'start', 'wait', 'collect'}
-steps = [step for job in jobs.values() for step in job['steps']]
+assert set(jobs) == {'start', 'wait', 'collect', 'benchmark', 'pages'}
+steps = [step for job in jobs.values() for step in job.get('steps', [])]
 by_name = {step['name']: step for step in steps}
 action_revisions = {step['uses'].split('@')[1] for step in steps
                     if step.get('uses', '').startswith('pc2/github2lab_action@')}
 assert len(action_revisions) == 1
 action_revision = action_revisions.pop()
 assert subprocess.check_output(['git', '-C', str(action), 'rev-parse', 'HEAD'], text=True).strip() == action_revision
-for definition in (workflow, checks, integration):
+for definition in (workflow, checks, integration, suite, weekly):
     for job in definition['jobs'].values():
         for step in job.get('steps', []):
             if 'uses' in step:
@@ -48,17 +50,19 @@ assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['requi
 assert workflow['on']['workflow_call']['inputs']['max_wait_minutes']['default'] == '330'
 
 
-def test_integration_runs_on_main_and_verifies_without_write_access():
-    assert set(integration['on']) == {'push', 'workflow_dispatch', 'schedule'}
-    assert integration['on']['push'] == {'branches': ['main']}
+def test_integration_suite_covers_all_scenarios_and_verifies_without_write_access():
+    assert set(integration['on']) == {'workflow_dispatch'}
+    assert set(suite['on']) == {'push', 'workflow_dispatch', 'schedule'}
+    assert suite['on']['push'] == {'branches': ['main']}
+    assert suite['jobs']['scenarios']['strategy']['matrix']['scenario'] == ['success', 'failure', 'handover', 'handover_failure']
     assert set(integration['on']['workflow_dispatch']['inputs']) == {'scenario', 'pull_request', 'context_run_id'}
-    assert integration['on']['workflow_dispatch']['inputs']['scenario']['options'] == ['success', 'failure', 'handover']
+    assert integration['on']['workflow_dispatch']['inputs']['scenario']['options'] == ['success', 'failure', 'handover', 'handover_failure', 'benchmark']
     assert integration['permissions'] == workflow['permissions']
     assert integration['concurrency']['cancel-in-progress'] == 'false'
     hpc = integration['jobs']['hpc']
     assert hpc['uses'] == './.github/workflows/hpc-pipeline.yml'
     assert hpc['if'] == "vars.GITLAB_PROJECT_ID != ''"
-    assert set(hpc['with']) == set(workflow['on']['workflow_call']['inputs'])
+    assert set(hpc['with']) <= set(workflow['on']['workflow_call']['inputs'])
     assert hpc['with']['context_run_id'] == '${{ inputs.context_run_id }}'
     assert hpc['with']['pipeline_variables'].splitlines()[0] == 'EXPECTED_COMMIT_SHA=${{ github.sha }}'
     assert hpc['secrets'] == {'GITLAB_TOKEN': '${{ secrets.GITLAB_TOKEN }}',
@@ -75,7 +79,13 @@ def test_integration_runs_on_main_and_verifies_without_write_access():
     rule = gitlab_ci['workflow']['rules'][0]['if']
     assert '$CI_PIPELINE_SOURCE == "trigger"' in rule and '$EXPECTED_COMMIT_SHA == $CI_COMMIT_SHA' in rule
     assert gitlab_ci['fail']['rules'] == [{'if': '$SCENARIO == "failure"'}]
-    assert gitlab_ci['slow']['rules'] == [{'if': '$SCENARIO == "handover"'}]
+    assert gitlab_ci['slow']['rules'] == [{'if': '$SCENARIO == "handover" || $SCENARIO == "handover_failure"'}]
+    assert gitlab_ci['slow']['artifacts']['when'] == 'always'
+    assert gitlab_ci['benchmark']['rules'] == [{'if': '$SCENARIO == "benchmark"'}]
+    assert set(weekly['on']) == {'push', 'schedule', 'workflow_dispatch'}
+    assert weekly['on']['push'] == {'branches': ['main']}
+    assert weekly['jobs']['benchmark']['uses'] == './.github/workflows/hpc-pipeline.yml'
+    assert json.loads(weekly['jobs']['benchmark']['with']['benchmark'])['mode'] == 'pages'
     assert 'results/' in gitlab_ci['quick']['artifacts']['paths']
 assert jobs['wait']['timeout-minutes'] == '345'
 assert "inputs.context_run_id == ''" in jobs['start']['if']
@@ -173,11 +183,11 @@ assert by_name['Follow GitLab jobs']['env']['SET_STATUS'] == 'false'
 checkout = by_name['Check out the selected commit']
 mirror = by_name['Push the selected commit to GitLab']
 assert checkout in jobs['start']['steps'] and mirror in jobs['start']['steps']
-assert checkout['with'] == {'ref': '${{ github.sha }}', 'fetch-depth': '0',
+assert checkout['with'] == {'ref': '${{ inputs.source_sha || github.sha }}', 'fetch-depth': '0',
                             'persist-credentials': 'false'}
 assert mirror['env'] == {'MODE': 'mirror', 'GITLAB_TOKEN': '${{ secrets.GITLAB_TOKEN }}',
-                         'MIRROR_SHA': '${{ github.sha }}',
-                         'MIRROR_BRANCH': '${{ github.ref_name }}',
+                         'MIRROR_SHA': '${{ inputs.source_sha || github.sha }}',
+                         'MIRROR_BRANCH': "${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}",
                          'MIRROR_ONLY': 'true', 'FORCE_PUSH': 'true'}
 assert steps.index(checkout) < steps.index(mirror) < steps.index(by_name['Start GitLab pipeline'])
 assert 'MIRROR_WAIT_MINUTES' not in by_name['Start GitLab pipeline']['env']
@@ -297,6 +307,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         'REQUEST_LOG': str(request_log), 'TMPDIR': str(fixture), 'TMP': str(fixture), 'TEMP': str(fixture),
         'GITLAB_HOSTNAME': 'git.example', 'GITLAB_PROJECT_ID': '42', 'GITLAB_TOKEN': 'read-token',
         'GITLAB_TRIGGER_TOKEN': 'trigger-token', 'GITHUB_TOKEN': 'github-token',
+        'SELECTED_SHA': 'a' * 40, 'SOURCE_SHA': 'a' * 40, 'SOURCE_REF': 'main', 'BENCHMARK': '{}',
         'GITHUB_SHA': 'a' * 40, 'GITHUB_REF_NAME': 'main', 'GITHUB_REF': 'refs/heads/main',
         'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REPOSITORY': 'example/project',
         'GITHUB_SERVER_URL': 'https://github.com', 'GITHUB_RUN_ID': '900',
@@ -396,9 +407,20 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
                           'GITHUB_REF_NAME': 'other', 'GITLAB_TRIGGER_TOKEN': '',
                           'PR': '8'}).returncode == 0
     assert 'pull_request=7' in output.read_text()
+    selected = context | {'sha': 'b' * 40, 'ref': 'hpc-pr-7-' + 'b' * 40,
+                          'benchmark': {'mode': 'compare', 'suites': [{'name': 'CPU'}]}}
+    context_file.write_text(json.dumps(selected))
+    original_pipeline = pipeline.copy()
+    pipeline.update(sha=selected['sha'], ref=selected['ref'])
+    assert run(identity).returncode == 0
+    assert f'sha={"b" * 40}' in output.read_text()
+    assert '"mode":"compare"' in output.read_text()
+    pipeline.clear()
+    pipeline.update(original_pipeline)
+    context_file.write_text(json.dumps(context))
     for key, value in [('repository', 'other/project'), ('hostname', 'other.invalid'),
                        ('project_id', 43), ('run_id', 901), ('workflow_id', 99),
-                       ('sha', 'b' * 40), ('ref', 'other'), ('pipeline_id', 'bad'),
+                       ('workflow_sha', 'b' * 40), ('workflow_ref', 'other'), ('pipeline_id', 'bad'),
                        ('pull_request', 'bad'), ('started_at', -1)]:
         context_file.write_text(json.dumps(context | {key: value}))
         assert run(identity).returncode != 0, key
@@ -480,11 +502,23 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     assert run(mirror_script, {'MIRROR_SHA': 'a' * 40, 'MIRROR_BRANCH': 'main',
                                'MIRROR_ONLY': 'true', 'FORCE_PUSH': 'true'}).returncode == 0
     arguments = [json.loads(line) for line in (fixture / 'git.jsonl').read_text().splitlines()]
-    assert ['push', '-o', 'ci.skip', '--force', 'gitlab', 'a' * 40 + ':refs/heads/main'] in arguments
+    assert ['push', '--force', 'gitlab', 'a' * 40 + ':refs/heads/main'] in arguments
     assert not any(args[0] in ('fetch', 'checkout', 'pull') for args in arguments)
     assert not any(json.loads(line)['method'] == 'POST' for line in request_log.read_text().splitlines())
     assert run(mirror_script, {'MIRROR_SHA': 'a' * 40, 'MIRROR_ONLY': 'true',
                                'MOCK_PUSH_EXIT': '1'}).returncode != 0
+
+    def test_mirror_preserves_the_optional_unchanged_branch_trigger():
+        for mirror_only in ('', 'false', 'true'):
+            result = run(mirror_script, {'MIRROR_SHA': 'a' * 40,
+                                         'MIRROR_ONLY': mirror_only})
+            assert result.returncode == 0, result.stderr
+            requests = [json.loads(line) for line in request_log.read_text().splitlines()]
+            triggers = [r for r in requests if r['method'] == 'POST']
+            assert len(triggers) == (0 if mirror_only == 'true' else 1)
+            assert all(r['url'].endswith('/projects/42/pipeline') for r in triggers)
+
+    test_mirror_preserves_the_optional_unchanged_branch_trigger()
 
     trigger = (action / 'trigger.sh').read_text()
     assert run(trigger, {'PIPELINE_REF': 'main',
@@ -562,14 +596,14 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     test_waiting_pipelines_complete_when_the_next_poll_finishes()
     test_invalid_poll_responses_never_report_completion()
 
-test_integration_runs_on_main_and_verifies_without_write_access()
+test_integration_suite_covers_all_scenarios_and_verifies_without_write_access()
 print('Workflow Bash parses and the caller preserves the commit and explicit permissions.')
 print('The integration workflow runs on main pushes and verifies with read access.')
 print('Main pushes, manual and scheduled callers execute and Python setup ignores checkout modules.')
 print('Retries reuse saved context without starting another pipeline.')
 print('Context ownership and pipeline identity reject mismatched repositories, workflows and commits.')
 print('Identity verification rejects mismatched projects, pipelines, branches, commits and sources.')
-print('Mirroring pushes the exact commit without starting jobs and triggering starts one pipeline.')
+print('Mirroring pushes the exact commit without an API trigger and triggering starts one pipeline.')
 print('Automatic continuation preserves the original context and fails after seven days.')
 print('PR reports update one bot comment per pipeline and preserve the original commit.')
 print('Failed pipelines and missing artifacts fail the final collection result.')

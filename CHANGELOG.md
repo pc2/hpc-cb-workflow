@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Optional benchmark suites use github-action-benchmark for history and regression checks.
+Reviewed PR commits can run through the trusted default branch caller.
+The command integration test verifies PR creation, comments, continuation and reporting retries.
+The CB_TEST_TOKEN secret and CB_TEST_ACTOR variable configure command testing.
+
+The integration suite verifies success, failure and both handover outcomes.
+A Julia measurement follows the GitLab artifact path into GitHub Pages history.
+Pushes, manual runs and weekly runs contribute to the benchmark history.
+Publication retries reuse the saved measurement without creating another point.
+
 The reusable workflow mirrors commits and verifies pipeline identity.
 It reports individual job checks and collects artifacts after failures.
 Start, wait and collect run as separate jobs with scoped credentials.
