@@ -2,5 +2,9 @@
   "10422/159476/Regression fixture": {
     "verdict": "success",
     "summary": "Benchmark suite Regression fixture.\n\n| Measurement | Current | Baseline | Unit | Ratio |\n| --- | --- | --- | --- | --- |\n| controlled measurement | 100 | unavailable | seconds | unavailable |\n\nBaseline commit none, initial measurement.\n\nMeasured commit 45b8d1355fd00e09a6a516ea41a6c1bc1c8f5c23, benchmark result success.\n\nWarning threshold 115%, failure threshold 150%.\n"
+  },
+  "10422/159486/Regression fixture": {
+    "verdict": "success",
+    "summary": "Benchmark suite Regression fixture.\n\n| Measurement | Current | Baseline | Unit | Ratio |\n| --- | --- | --- | --- | --- |\n| controlled measurement | 100 | 100 | seconds | 1.000 |\n\nBaseline commit 45b8d1355fd00e09a6a516ea41a6c1bc1c8f5c23.\n\nMeasured commit 2befa6af9c5d680ae34255614b3c367c107d69c3, benchmark result success.\n\nWarning threshold 115%, failure threshold 150%.\n"
   }
 }
