@@ -1,0 +1,42 @@
+# SPDX-FileCopyrightText: 2026 Gerrit Pape <gerrit.pape@uni-paderborn.de>
+#
+# SPDX-License-Identifier: MIT
+
+# Jobs for the integration workflow, SCENARIO selects the pipeline outcome.
+
+workflow:
+  rules:
+    - if: >-
+        $CI_PIPELINE_SOURCE == "trigger" &&
+        $EXPECTED_COMMIT_SHA == $CI_COMMIT_SHA
+
+variables:
+  INTEGRATION_RUNNER_TAG: otus-shell
+  GIT_DEPTH: "1"
+
+default:
+  tags: [$INTEGRATION_RUNNER_TAG]
+  id_tokens:
+    CI_JOB_JWT:
+      aud: https://git.uni-paderborn.de
+
+quick:
+  script:
+    - mkdir -p results
+    - printf '%s\n' "$CI_COMMIT_SHA" > results/commit.txt
+  artifacts:
+    paths: [results/]
+    expire_in: 1 day
+
+fail:
+  rules:
+    - if: $SCENARIO == "failure"
+  script:
+    - exit 1
+
+# Outlasts the one minute monitoring deadline of the handover scenario.
+slow:
+  rules:
+    - if: $SCENARIO == "handover"
+  script:
+    - sleep 300

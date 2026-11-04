@@ -1,0 +1,220 @@
+# SPDX-FileCopyrightText: 2026 Gerrit Pape <gerrit.pape@uni-paderborn.de>
+#
+# SPDX-License-Identifier: MIT
+
+# Runs the reusable workflow against the configured GitLab project.
+# The mirrored commit is this repository, its .gitlab-ci.yml defines the jobs.
+
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: The pipeline outcome to verify.
+        type: choice
+        options: [success, failure, handover]
+        default: success
+      pull_request:
+        description: An optional PR whose head is the selected commit.
+        type: string
+        default: ''
+      context_run_id:
+        description: The original GitHub run, set by automatic continuation.
+        type: string
+        default: ''
+  schedule:
+    - cron: '0 4 * * 1'
+
+permissions:
+  contents: read
+  checks: write
+  actions: write
+  pull-requests: write
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  hpc:
+    if: vars.GITLAB_PROJECT_ID != ''
+    uses: ./.github/workflows/hpc-pipeline.yml
+    with:
+      gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
+      gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
+      context_run_id: ${{ inputs.context_run_id }}
+      pull_request: ${{ inputs.pull_request }}
+      max_wait_minutes: ${{ inputs.scenario == 'handover' && '1' || '330' }}
+      pipeline_variables: |
+        EXPECTED_COMMIT_SHA=${{ github.sha }}
+        SCENARIO=${{ inputs.scenario || 'success' }}
+    secrets:
+      GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+      GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
+
+  verify:
+    name: Verify integration
+    needs: hpc
+    if: ${{ !cancelled() && needs.hpc.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
+    env:
+      GITLAB_HOSTNAME: ${{ vars.GITLAB_HOSTNAME }}
+      GITLAB_PROJECT_ID: ${{ vars.GITLAB_PROJECT_ID }}
+      CONTEXT_RUN_ID: ${{ inputs.context_run_id || github.run_id }}
+      CONTINUATION: ${{ inputs.context_run_id != '' }}
+      HPC_RESULT: ${{ needs.hpc.result }}
+    steps:
+      - name: Download pipeline context
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # Use version 8.0.2.
+        with:
+          name: hpc-context
+          run-id: ${{ env.CONTEXT_RUN_ID }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/hpc-context
+      - name: Read the pipeline
+        id: pipeline
+        shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          INPUT_SCENARIO: ${{ inputs.scenario || 'success' }}
+        run: |
+          set -euo pipefail
+          context="$RUNNER_TEMP/hpc-context/context.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --argjson run "$CONTEXT_RUN_ID" \
+            '.repository == $repo and .run_id == $run' "$context"
+          pipeline_id=$(jq -r .pipeline_id "$context")
+          sha=$(jq -r .sha "$context")
+          api="https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$pipeline_id"
+          gitlab() {
+            curl --fail --silent --show-error --retry 3 --max-time 60 --header "PRIVATE-TOKEN: $GITLAB_TOKEN" "$1"
+          }
+          pipeline=$(gitlab "$api")
+          jq -e --arg sha "$sha" --arg ref "$(jq -r .ref "$context")" --argjson id "$pipeline_id" \
+            '.sha == $sha and .ref == $ref and .id == $id and .source == "trigger"' <<< "$pipeline"
+          variables=$(gitlab "$api/variables")
+          jq -e --arg sha "$sha" 'any(.[]; .key == "EXPECTED_COMMIT_SHA" and .value == $sha)' <<< "$variables"
+          scenario=$(jq -er '.[] | select(.key == "SCENARIO") | .value' <<< "$variables")
+          [[ $scenario =~ ^(success|failure|handover)$ ]]
+          if [[ $CONTINUATION != true ]]; then
+            [[ $scenario == "$INPUT_SCENARIO" ]]
+          fi
+          # The first run of a handover ends before the pipeline, every other run collects results.
+          collected=true
+          if [[ $scenario == handover && $CONTINUATION != true ]]; then
+            collected=false
+          fi
+          expected_status=success
+          if [[ $scenario == failure ]]; then
+            expected_status=failed
+          fi
+          status=$(jq -r .status <<< "$pipeline")
+          jobs=$(gitlab "$api/jobs?per_page=100")
+          jq -e 'any(.[]; .name == "quick")' <<< "$jobs"
+          if [[ $collected == true ]]; then
+            [[ $status == "$expected_status" ]]
+            jq -e 'any(.[]; .name == "quick" and .status == "success")' <<< "$jobs"
+          fi
+          case $scenario in
+            failure) jq -e 'any(.[]; .name == "fail")' <<< "$jobs" ;;
+            handover) jq -e 'any(.[]; .name == "slow")' <<< "$jobs" ;;
+          esac
+          {
+            printf 'pipeline_id=%s\nsha=%s\nscenario=%s\n' "$pipeline_id" "$sha" "$scenario"
+            printf 'collected=%s\nstatus=%s\n' "$collected" "$status"
+            printf 'pull_request=%s\n' "$(jq -r .pull_request "$context")"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Pipeline %s for commit %s is %s, scenario %s.\n' "$pipeline_id" "$sha" "$status" "$scenario" >> "$GITHUB_STEP_SUMMARY"
+      - name: Verify the GitHub result
+        shell: bash
+        env:
+          SCENARIO: ${{ steps.pipeline.outputs.scenario }}
+          COLLECTED: ${{ steps.pipeline.outputs.collected }}
+        run: |
+          set -euo pipefail
+          expected=success
+          if [[ $SCENARIO == failure && $COLLECTED == true ]]; then
+            expected=failure
+          fi
+          [[ $HPC_RESULT == "$expected" ]]
+      - name: Verify check runs
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PIPELINE_ID: ${{ steps.pipeline.outputs.pipeline_id }}
+          SHA: ${{ steps.pipeline.outputs.sha }}
+          COLLECTED: ${{ steps.pipeline.outputs.collected }}
+          STATUS: ${{ steps.pipeline.outputs.status }}
+        run: |
+          set -euo pipefail
+          prefix="gitlab/$GITLAB_PROJECT_ID/$PIPELINE_ID/"
+          checks=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" |
+            jq --arg prefix "$prefix" '[.check_runs[] | select(.name | startswith($prefix))]')
+          jq -e --arg prefix "$prefix" 'any(.[]; .name == $prefix + "quick") and any(.[]; .name == $prefix + "pipeline")' <<< "$checks"
+          if [[ $COLLECTED == true ]]; then
+            conclusion=success
+            if [[ $STATUS == failed ]]; then
+              conclusion=failure
+            fi
+            jq -e --arg name "${prefix}pipeline" --arg conclusion "$conclusion" \
+              'any(.[]; .name == $name and .status == "completed" and .conclusion == $conclusion)' <<< "$checks"
+          fi
+      - name: Verify the continuation run
+        if: steps.pipeline.outputs.collected == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          for attempt in $(seq 1 12); do
+            if gh api "repos/$GITHUB_REPOSITORY/actions/workflows/$workflow_id/runs?event=workflow_dispatch&branch=$default_branch&per_page=20" |
+              jq -e --argjson run "$GITHUB_RUN_ID" 'any(.workflow_runs[]; .id > $run)'; then
+              echo 'A continuation run monitors the pipeline on the default branch.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo '::error::No continuation run was dispatched on the default branch.'
+          exit 1
+      - name: Download collected artifacts
+        if: steps.pipeline.outputs.collected == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # Use version 8.0.2.
+        with:
+          name: gitlab-${{ env.GITLAB_PROJECT_ID }}-${{ steps.pipeline.outputs.pipeline_id }}
+          path: ${{ runner.temp }}/collected
+      - name: Verify collected artifacts
+        if: steps.pipeline.outputs.collected == 'true'
+        shell: bash
+        env:
+          SHA: ${{ steps.pipeline.outputs.sha }}
+        run: |
+          set -euo pipefail
+          ls -l "$RUNNER_TEMP/collected"
+          [[ $(unzip -p "$RUNNER_TEMP/collected/quick.zip" results/commit.txt) == "$SHA" ]]
+      - name: Verify the PR comment
+        if: steps.pipeline.outputs.collected == 'true' && steps.pipeline.outputs.pull_request != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pipeline.outputs.pull_request }}
+          PIPELINE_ID: ${{ steps.pipeline.outputs.pipeline_id }}
+          SHA: ${{ steps.pipeline.outputs.sha }}
+          STATUS: ${{ steps.pipeline.outputs.status }}
+        run: |
+          set -euo pipefail
+          marker="<!-- hpc-cb:$GITLAB_PROJECT_ID:$PIPELINE_ID -->"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" |
+            jq -se --arg marker "$marker" --arg sha "$SHA" --arg status "**$STATUS**" \
+              '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith($marker)))]
+                | length == 1 and (.[0].body | contains($sha) and contains($status))'

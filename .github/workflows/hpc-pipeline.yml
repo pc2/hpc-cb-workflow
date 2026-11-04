@@ -1,0 +1,388 @@
+# SPDX-FileCopyrightText: 2026 Gerrit Pape <gerrit.pape@uni-paderborn.de>
+#
+# SPDX-License-Identifier: MIT
+
+name: GitLab pipeline
+
+on:
+  workflow_call:
+    inputs:
+      gitlab_hostname:
+        type: string
+        required: true
+      gitlab_project_id:
+        type: string
+        required: true
+      pipeline_variables:
+        type: string
+        default: ''
+      context_run_id:
+        description: The original GitHub run, set when resuming monitoring.
+        type: string
+        default: ''
+      pull_request:
+        description: An optional PR whose head is the selected commit.
+        type: string
+        default: ''
+      max_wait_minutes:
+        description: Minutes one run monitors before continuing in another run, at most 330.
+        type: string
+        default: '330'
+    secrets:
+      GITLAB_TOKEN:
+        required: true
+      GITLAB_TRIGGER_TOKEN:
+        required: false
+
+permissions:
+  contents: read
+  checks: write
+  actions: write
+  pull-requests: write
+
+env:
+  GITLAB_HOSTNAME: ${{ inputs.gitlab_hostname }}
+  GITLAB_PROJECT_ID: ${{ inputs.gitlab_project_id }}
+
+jobs:
+  start:
+    name: Start on GitLab
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')) &&
+      inputs.context_run_id == '' && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - name: Validate configuration
+        shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
+          PR: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+          : "${GITLAB_TOKEN:?Configure the GITLAB_TOKEN repository secret.}"
+          : "${GITLAB_TRIGGER_TOKEN:?Configure the GITLAB_TRIGGER_TOKEN repository secret.}"
+          [[ $GITLAB_PROJECT_ID =~ ^[1-9][0-9]*$ ]]
+          [[ $GITLAB_HOSTNAME =~ ^[a-zA-Z0-9.-]+$ ]]
+          [[ -z $PR || $PR =~ ^[1-9][0-9]*$ ]]
+      - name: Verify PR commit
+        if: inputs.pull_request != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" |
+            jq -e --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+              '.state == "open" and .head.sha == $sha and .base.repo.full_name == $repo'
+      - name: Check out the selected commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Use version 7.0.1.
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Push the selected commit to GitLab
+        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        env:
+          MODE: mirror
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          MIRROR_SHA: ${{ github.sha }}
+          MIRROR_BRANCH: ${{ github.ref_name }}
+          MIRROR_ONLY: 'true'
+          FORCE_PUSH: 'true'
+      - name: Start GitLab pipeline
+        id: trigger
+        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        env:
+          MODE: trigger
+          GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
+          PIPELINE_REF: ${{ github.ref_name }}
+          PIPELINE_VARIABLES: ${{ inputs.pipeline_variables }}
+      - name: Save pipeline context
+        shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          PIPELINE_ID: ${{ steps.trigger.outputs.pipeline_id }}
+          PR: ${{ inputs.pull_request }}
+        run: |
+          set -euo pipefail
+          [[ $PIPELINE_ID =~ ^[1-9][0-9]*$ ]]
+          pipeline=$(curl --fail --silent --show-error --retry 3 --max-time 60 \
+            --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            "https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$PIPELINE_ID")
+          jq -e --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF_NAME" \
+            --argjson project "$GITLAB_PROJECT_ID" --argjson id "$PIPELINE_ID" \
+            '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
+              and .source == "trigger"' <<< "$pipeline"
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
+          mkdir -p "$RUNNER_TEMP/hpc-context"
+          jq -n --arg repository "$GITHUB_REPOSITORY" --arg hostname "$GITLAB_HOSTNAME" \
+            --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF_NAME" --arg pr "$PR" \
+            --argjson run "$GITHUB_RUN_ID" --argjson workflow "$workflow_id" \
+            --argjson project "$GITLAB_PROJECT_ID" --argjson pipeline "$PIPELINE_ID" \
+            --argjson started "$(date +%s)" \
+            '{schema: 1, repository: $repository, hostname: $hostname, project_id: $project,
+              pipeline_id: $pipeline, sha: $sha, ref: $ref, pull_request: $pr,
+              run_id: $run, workflow_id: $workflow, started_at: $started}' \
+            > "$RUNNER_TEMP/hpc-context/context.json"
+          printf 'Pipeline context belongs to GitHub run %s.\n' "$GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+      - name: Store pipeline context
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # Use version 7.0.2.
+        with:
+          name: hpc-context
+          path: ${{ runner.temp }}/hpc-context/context.json
+          if-no-files-found: error
+          retention-days: 30
+
+  wait:
+    name: Monitor GitLab jobs
+    needs: start
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')) &&
+      (needs.start.result == 'success' || inputs.context_run_id != '' || github.run_attempt > 1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    permissions:
+      actions: write
+      checks: write
+    concurrency:
+      group: hpc-monitor-${{ github.repository }}-${{ inputs.gitlab_project_id }}-${{ inputs.context_run_id || github.run_id }}
+      cancel-in-progress: false
+    env:
+      CONTEXT_RUN_ID: ${{ inputs.context_run_id || github.run_id }}
+    outputs:
+      pipeline_id: ${{ steps.identity.outputs.pipeline_id }}
+      sha: ${{ steps.identity.outputs.sha }}
+      ref: ${{ steps.identity.outputs.ref }}
+      pull_request: ${{ steps.identity.outputs.pull_request }}
+      finished: ${{ steps.poll.outputs.finished }}
+    steps:
+      - name: Verify context source
+        id: origin
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes }}
+        run: |
+          set -euo pipefail
+          [[ $CONTEXT_RUN_ID =~ ^[1-9][0-9]*$ ]]
+          [[ $MAX_WAIT_MINUTES =~ ^[1-9][0-9]*$ && $MAX_WAIT_MINUTES -le 330 ]]
+          workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
+          origin=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CONTEXT_RUN_ID")
+          jq -e --arg repo "$GITHUB_REPOSITORY" \
+            --argjson workflow "$workflow_id" \
+            '.repository.full_name == $repo and .head_repository.full_name == $repo
+              and .workflow_id == $workflow
+              and (.event == "workflow_dispatch" or .event == "schedule"
+                or (.event == "push" and .head_branch == "main"))' <<< "$origin"
+          printf 'workflow_id=%s\nsha=%s\nref=%s\n' "$workflow_id" \
+            "$(jq -r .head_sha <<< "$origin")" "$(jq -r .head_branch <<< "$origin")" >> "$GITHUB_OUTPUT"
+      - name: Download pipeline context
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # Use version 8.0.2.
+        with:
+          name: hpc-context
+          run-id: ${{ env.CONTEXT_RUN_ID }}
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          path: ${{ runner.temp }}/hpc-context
+      - name: Verify pipeline identity
+        id: identity
+        shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          ORIGIN_SHA: ${{ steps.origin.outputs.sha }}
+          ORIGIN_REF: ${{ steps.origin.outputs.ref }}
+          WORKFLOW_ID: ${{ steps.origin.outputs.workflow_id }}
+        run: |
+          set -euo pipefail
+          : "${GITLAB_TOKEN:?Configure the GITLAB_TOKEN repository secret.}"
+          context="$RUNNER_TEMP/hpc-context/context.json"
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg host "$GITLAB_HOSTNAME" \
+            --arg sha "$ORIGIN_SHA" --arg ref "$ORIGIN_REF" \
+            --argjson project "$GITLAB_PROJECT_ID" --argjson run "$CONTEXT_RUN_ID" \
+            --argjson workflow "$WORKFLOW_ID" \
+            '.schema == 1 and .repository == $repo and .hostname == $host
+              and .project_id == $project and .run_id == $run and .workflow_id == $workflow
+              and .sha == $sha and (.sha | test("^[0-9a-f]{40}$")) and .ref == $ref
+              and (.pipeline_id | type == "number" and . > 0 and floor == .)
+              and (.pull_request | test("^([1-9][0-9]*)?$"))
+              and (.started_at | type == "number" and . > 0 and floor == .)' "$context"
+          pipeline_id=$(jq -r .pipeline_id "$context")
+          pipeline=$(curl --fail --silent --show-error --retry 3 --max-time 60 \
+            --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            "https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$pipeline_id")
+          jq -e --arg sha "$ORIGIN_SHA" --arg ref "$ORIGIN_REF" \
+            --argjson project "$GITLAB_PROJECT_ID" --argjson id "$pipeline_id" \
+            '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
+              and .source == "trigger"' <<< "$pipeline"
+          {
+            printf 'pipeline_id=%s\nsha=%s\n' "$pipeline_id" "$ORIGIN_SHA"
+            printf 'ref=%s\n' "$ORIGIN_REF"
+            printf 'pull_request=%s\nstarted_at=%s\n' "$(jq -r .pull_request "$context")" "$(jq -r .started_at "$context")"
+          } >> "$GITHUB_OUTPUT"
+          {
+            printf 'GitLab pipeline [%s](%s).\n\n' "$pipeline_id" "$(jq -r .web_url <<< "$pipeline")"
+            printf 'Original commit %s.\n\n' "$ORIGIN_SHA"
+            printf 'To resume manually, run the default branch caller with context_run_id set to %s.\n' "$CONTEXT_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Follow GitLab jobs
+        id: poll
+        continue-on-error: true
+        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        env:
+          MODE: get_status
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PIPELINE_ID: ${{ steps.identity.outputs.pipeline_id }}
+          TARGET_SHA: ${{ steps.identity.outputs.sha }}
+          CHECK_PREFIX: gitlab/${{ inputs.gitlab_project_id }}/${{ steps.identity.outputs.pipeline_id }}/
+          SET_STATUS: 'false'
+          CHECK_RUNS: 'true'
+          SUMMARY: 'true'
+          LOG_TRACES: 'false'
+          MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes }}
+          POLL_TIMEOUT: '60'
+      - name: Verify monitoring result
+        shell: bash
+        env:
+          FINISHED: ${{ steps.poll.outputs.finished }}
+        run: |
+          [[ $FINISHED == 'true' || $FINISHED == 'false' ]]
+      - name: Continue monitoring
+        if: steps.poll.outputs.finished == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_ID: ${{ steps.origin.outputs.workflow_id }}
+          STARTED_AT: ${{ steps.identity.outputs.started_at }}
+        run: |
+          set -euo pipefail
+          if (( $(date +%s) - STARTED_AT >= 604800 )); then
+            echo '::error::Automatic monitoring reached seven days, resume manually using the original context run ID.'
+            exit 1
+          fi
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          [[ -n $default_branch ]]
+          gh workflow run "$WORKFLOW_ID" --repo "$GITHUB_REPOSITORY" --ref "$default_branch" \
+            --field "context_run_id=$CONTEXT_RUN_ID"
+          echo 'Another GitHub run will continue monitoring the same GitLab pipeline.' >> "$GITHUB_STEP_SUMMARY"
+
+  collect:
+    name: Collect results
+    needs: wait
+    if: ${{ !cancelled() && needs.wait.outputs.finished == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: hpc-collect-${{ github.repository }}-${{ inputs.gitlab_project_id }}-${{ needs.wait.outputs.pipeline_id }}
+      cancel-in-progress: false
+    env:
+      PIPELINE_ID: ${{ needs.wait.outputs.pipeline_id }}
+      EXPECTED_SHA: ${{ needs.wait.outputs.sha }}
+      PIPELINE_REF: ${{ needs.wait.outputs.ref }}
+      PR: ${{ needs.wait.outputs.pull_request }}
+    steps:
+      - name: Verify completed pipeline
+        id: identity
+        shell: bash
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          set -euo pipefail
+          pipeline=$(curl --fail --silent --show-error --retry 3 --max-time 60 \
+            --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+            "https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$PIPELINE_ID")
+          jq -e --arg sha "$EXPECTED_SHA" --arg ref "$PIPELINE_REF" \
+            --argjson project "$GITLAB_PROJECT_ID" --argjson id "$PIPELINE_ID" \
+            '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
+              and .source == "trigger"
+              and (.status | IN("success", "failed", "canceled", "skipped"))' <<< "$pipeline"
+          printf 'status=%s\nweb_url=%s\n' "$(jq -r .status <<< "$pipeline")" "$(jq -r .web_url <<< "$pipeline")" >> "$GITHUB_OUTPUT"
+      - name: Prepare artifact download
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        run: |
+          python3 -I -m venv "$RUNNER_TEMP/github2lab-python"
+          cat > "$RUNNER_TEMP/github2lab-python/requirements.txt" <<'EOF'
+          certifi==2026.10.23 \
+              --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
+          charset-normalizer==3.5.2 \
+              --hash=sha256:b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685
+          idna==3.20 \
+              --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+          requests==2.34.2 \
+              --hash=sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+          urllib3==2.8.0 \
+              --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+          EOF
+          "$RUNNER_TEMP/github2lab-python/bin/python" -I -m pip install --require-hashes --only-binary :all: \
+            -r "$RUNNER_TEMP/github2lab-python/requirements.txt"
+          echo "$RUNNER_TEMP/github2lab-python/bin" >> "$GITHUB_PATH"
+      - name: Collect GitLab artifacts
+        id: artifacts
+        uses: pc2/github2lab_action@202835bf9534710d03788a97488da57ec04d7622
+        env:
+          MODE: get_artifact
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          PIPELINE_ID: ${{ env.PIPELINE_ID }}
+          ARTIFACT_DIR: ${{ runner.temp }}/hpc-artifacts
+          UPLOAD_ARTIFACTS: 'false'
+      - name: Upload GitLab artifacts
+        id: upload
+        if: always() && steps.identity.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # Use version 7.0.2.
+        with:
+          name: gitlab-${{ inputs.gitlab_project_id }}-${{ env.PIPELINE_ID }}
+          path: ${{ runner.temp }}/hpc-artifacts/
+          overwrite: true
+          if-no-files-found: error
+          retention-days: 30
+      - name: Report to the PR
+        if: always() && steps.identity.outcome == 'success' && env.PR != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.identity.outputs.status }}
+          WEB_URL: ${{ steps.identity.outputs.web_url }}
+          DOWNLOAD_OUTCOME: ${{ steps.artifacts.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          [[ $PR =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" |
+            jq -e --arg repo "$GITHUB_REPOSITORY" '.base.repo.full_name == $repo'
+          marker="<!-- hpc-cb:$GITLAB_PROJECT_ID:$PIPELINE_ID -->"
+          comment_id=$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" |
+            jq -sr --arg marker "$marker" \
+              '[.[][] | select(.user.login == "github-actions[bot]" and (.body | startswith($marker)))] | first.id // empty')
+          body=$(printf '%s\n\nPipeline [%s](%s) for commit [%s](%s/%s/commit/%s) finished with **%s**.\n\nArtifact download finished with **%s**.\nArtifact upload finished with **%s**.\n\n[GitHub run](%s/%s/actions/runs/%s).\n' \
+            "$marker" "$PIPELINE_ID" "$WEB_URL" "$EXPECTED_SHA" "$GITHUB_SERVER_URL" \
+            "$GITHUB_REPOSITORY" "$EXPECTED_SHA" "$STATUS" "$DOWNLOAD_OUTCOME" "$UPLOAD_OUTCOME" \
+            "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID")
+          if [[ -n $comment_id ]]; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" --raw-field "body=$body" --silent
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --raw-field "body=$body" --silent
+          fi
+      - name: Set final result
+        if: always() && steps.identity.outcome == 'success'
+        shell: bash
+        env:
+          STATUS: ${{ steps.identity.outputs.status }}
+          DOWNLOAD_OUTCOME: ${{ steps.artifacts.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          [[ $STATUS == success && $DOWNLOAD_OUTCOME == success && $UPLOAD_OUTCOME == success ]]
