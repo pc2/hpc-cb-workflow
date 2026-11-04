@@ -1,0 +1,6 @@
+{
+  "10422/159474/Julia linear solve": {
+    "verdict": "success",
+    "summary": "Benchmark suite Julia linear solve.\n\n| Measurement | Current | Baseline | Unit | Ratio |\n| --- | --- | --- | --- | --- |\n| linear_solve_512/generic/Julia-1.10.12/BLAS-lbt/threads-1 | 0.002858103 | unavailable | seconds | unavailable |\n\nBaseline commit none, initial measurement.\n\nMeasured commit 45b8d1355fd00e09a6a516ea41a6c1bc1c8f5c23, benchmark result success.\n\nWarning threshold 200%, failure threshold 1000%.\n"
+  }
+}
