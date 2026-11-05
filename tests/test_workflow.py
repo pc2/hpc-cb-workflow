@@ -213,6 +213,13 @@ body = json.loads(args[args.index('--data') + 1]) if '--data' in args else None
 with open(os.environ['REQUEST_LOG'], 'a') as log:
     log.write(json.dumps({'url': url, 'method': method, 'body': body}) + '\\n')
 if url.endswith('/trigger/pipeline'):
+    if 'MOCK_TRIGGER_RESPONSE' in os.environ:
+        print(os.environ['MOCK_TRIGGER_RESPONSE'])
+        sys.exit(0)
+    attempts = sum('/trigger/pipeline' in line for line in Path(os.environ['REQUEST_LOG']).read_text().splitlines())
+    if attempts <= int(os.environ.get('MOCK_TRIGGER_MISSING', '0')):
+        print('{"message":{"base":["Reference not found"]}}')
+        sys.exit(0)
     print(Path(os.environ['PIPELINE_RESPONSE']).read_text())
 elif '/repository/commits/' in url:
     print('{}')
@@ -567,6 +574,23 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     assert 'pipeline_id=123' in output.read_text()
     assert run(trigger, {'PIPELINE_VARIABLES': 'invalid line'}).returncode != 0
     assert not request_log.read_text()
+
+    def test_trigger_retries_until_gitlab_knows_the_pushed_ref():
+        result = run(trigger, {'PIPELINE_REF': 'main', 'MOCK_TRIGGER_MISSING': '1'})
+        assert result.returncode == 0, result.stderr
+        requests = [json.loads(line) for line in request_log.read_text().splitlines()]
+        assert sum(request['method'] == 'POST' for request in requests) == 2
+        assert 'pipeline_id=123' in output.read_text()
+        result = run(trigger, {'PIPELINE_REF': 'main', 'MOCK_TRIGGER_MISSING': '99'})
+        assert result.returncode != 0
+        assert 'Reference not found' in result.stdout
+        assert 'pipeline_id=' not in output.read_text()
+        result = run(trigger, {'PIPELINE_REF': 'main', 'MOCK_TRIGGER_RESPONSE': '{"message":"401 Unauthorized"}'})
+        assert result.returncode != 0
+        requests = [json.loads(line) for line in request_log.read_text().splitlines()]
+        assert sum(request['method'] == 'POST' for request in requests) == 1
+
+    test_trigger_retries_until_gitlab_knows_the_pushed_ref()
 
     poll = (action / 'get_ci_state.sh').read_text()
     for status, expected in [('success', 0), ('failed', 1), ('canceled', 1), ('skipped', 1)]:
