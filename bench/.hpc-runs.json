@@ -10,5 +10,9 @@
   "10422/159495/Julia linear solve": {
     "verdict": "success",
     "summary": "Benchmark suite Julia linear solve.\n\n| Measurement | Current | Baseline | Unit | Ratio |\n| --- | --- | --- | --- | --- |\n| linear_solve_512/generic/Julia-1.10.12/BLAS-lbt/threads-1 | 0.001972639 | 0.00177664 | seconds | 1.110 |\n\nBaseline commit 2befa6af9c5d680ae34255614b3c367c107d69c3.\n\nMeasured commit 3405033391b7199882e2dbddf8825917b24696cf, benchmark result success.\n\nWarning threshold 200%, failure threshold 1000%.\n"
+  },
+  "10422/159563/Julia linear solve": {
+    "verdict": "success",
+    "summary": "Benchmark suite Julia linear solve.\n\n| Measurement | Current | Baseline | Unit | Ratio |\n| --- | --- | --- | --- | --- |\n| linear_solve_512/generic/Julia-1.10.12/BLAS-lbt/threads-1 | 0.002126708 | 0.001972639 | seconds | 1.078 |\n\nBaseline commit 3405033391b7199882e2dbddf8825917b24696cf.\n\nMeasured commit 73febcf2a9c616984ad699c3e9b675a74077fb96, benchmark result success.\n\nWarning threshold 200%, failure threshold 1000%.\n"
   }
 }
