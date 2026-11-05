@@ -248,6 +248,9 @@ else:
     date = bin_dir / 'date'
     date.write_text('#!/usr/bin/env bash\nvalue=$(cat "$DATE_CALLED" 2>/dev/null || echo 0)\nvalue=$((value + 100))\necho "$value" > "$DATE_CALLED"\necho "$value"\n')
     date.chmod(0o755)
+    sleep = bin_dir / 'sleep'
+    sleep.write_text('#!/usr/bin/env bash\nexit 0\n')
+    sleep.chmod(0o755)
     git = bin_dir / 'git'
     git.write_text(f'#!{sys.executable}\n' + '''
 import json
@@ -257,6 +260,10 @@ import sys
 with open(os.environ['GIT_ARGUMENT_LOG'], 'a') as log:
     log.write(json.dumps(sys.argv[1:]) + '\\n')
 if sys.argv[1] == 'push':
+    pushes = sum(json.loads(line)[0] == 'push' for line in Path(os.environ['GIT_ARGUMENT_LOG']).read_text().splitlines())
+    if pushes <= int(os.environ.get('MOCK_PUSH_LOCKED', '0')):
+        print("remote: error: cannot lock ref 'refs/heads/main': is at " + 'b' * 40 + ' but expected ' + 'c' * 40)
+        sys.exit(1)
     print('Everything up-to-date')
     sys.exit(int(os.environ.get('MOCK_PUSH_EXIT', '0')))
 ''')
@@ -342,6 +349,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         summary.write_text('')
         request_log.write_text('')
         gh_log.write_text('')
+        (fixture / 'git.jsonl').write_text('')
         (fixture / 'pipeline-reads').write_text('0')
         pipeline_file.write_text(json.dumps(pipeline))
         result = subprocess.run(['bash'], input=script, text=True,
@@ -553,6 +561,19 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     assert not any(json.loads(line)['method'] == 'POST' for line in request_log.read_text().splitlines())
     assert run(mirror_script, {'MIRROR_SHA': 'a' * 40, 'MIRROR_ONLY': 'true',
                                'MOCK_PUSH_EXIT': '1'}).returncode != 0
+    arguments = [json.loads(line) for line in (fixture / 'git.jsonl').read_text().splitlines()]
+    assert sum(args[0] == 'push' for args in arguments) == 1
+
+    def test_mirror_retries_pushes_rejected_by_a_locked_branch():
+        for locked, expected, pushes in [('1', 0, 2), ('9', 1, 5)]:
+            result = run(mirror_script, {'MIRROR_SHA': 'a' * 40, 'MIRROR_BRANCH': 'main',
+                                         'MIRROR_ONLY': 'true', 'FORCE_PUSH': 'true',
+                                         'MOCK_PUSH_LOCKED': locked})
+            assert (result.returncode != 0) == bool(expected), result.stdout
+            arguments = [json.loads(line) for line in (fixture / 'git.jsonl').read_text().splitlines()]
+            assert sum(args[0] == 'push' for args in arguments) == pushes
+
+    test_mirror_retries_pushes_rejected_by_a_locked_branch()
 
     def test_mirror_preserves_the_optional_unchanged_branch_trigger():
         for mirror_only in ('', 'false', 'true'):

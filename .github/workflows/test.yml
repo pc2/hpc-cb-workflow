@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Use version 7.0.1.
         with:
           repository: pc2/github2lab_action
-          ref: 379d0c1cb88fa99aacff762ba3c26f8a98d17a8f
+          ref: cc3cddb075ef63762970730859c8061e3121ea68
           path: .tmp/github2lab_action
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # Use version 7.1.0.
         with:

@@ -115,7 +115,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Push the selected commit to GitLab
-        uses: pc2/github2lab_action@379d0c1cb88fa99aacff762ba3c26f8a98d17a8f
+        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
         env:
           MODE: mirror
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -125,7 +125,7 @@ jobs:
           FORCE_PUSH: 'true'
       - name: Start GitLab pipeline
         id: trigger
-        uses: pc2/github2lab_action@379d0c1cb88fa99aacff762ba3c26f8a98d17a8f
+        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
         env:
           MODE: trigger
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
@@ -279,7 +279,7 @@ jobs:
       - name: Follow GitLab jobs
         id: poll
         continue-on-error: true
-        uses: pc2/github2lab_action@379d0c1cb88fa99aacff762ba3c26f8a98d17a8f
+        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
         env:
           MODE: get_status
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -376,7 +376,7 @@ jobs:
           echo "$RUNNER_TEMP/github2lab-python/bin" >> "$GITHUB_PATH"
       - name: Collect GitLab artifacts
         id: artifacts
-        uses: pc2/github2lab_action@379d0c1cb88fa99aacff762ba3c26f8a98d17a8f
+        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
         env:
           MODE: get_artifact
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
