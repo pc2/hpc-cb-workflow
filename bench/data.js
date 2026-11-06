@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793895576484,
+  "lastUpdate": 1793972939788,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Regression fixture": [
@@ -156,6 +156,33 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/pc2/hpc-cb-workflow/commit/602c666dcc442b475bb4af676249670847af7f44"
         },
         "date": 1793895576472,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "controlled measurement",
+            "value": 100,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "committer": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "id": "7cffcd8416936c6b1de04c549d577888aad4cdd5",
+          "message": "harden monitoring, PR command and collection\n\n- Retry continuation dispatches and tolerate GitLab outages during monitoring\n- Cover all jobs and child pipelines in checks and collected artifacts\n- Require /hpc <commit> and dispatch only when the PR head matches the reviewed commit\n- Start pipelines on pushes to the default branch instead of a hardcoded main\n- Let pipelines without artifacts pass collection and report the archive count\n- End monitoring with status manual when a manual job blocks the pipeline\n- Pin github2lab_action to 721e2ab",
+          "timestamp": "2026-11-06T13:46:08Z",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/7cffcd8416936c6b1de04c549d577888aad4cdd5"
+        },
+        "date": 1793972939780,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
