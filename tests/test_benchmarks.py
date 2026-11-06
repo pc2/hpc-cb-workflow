@@ -71,64 +71,95 @@ class BenchmarkTests(unittest.TestCase):
         pr['head']['ref'] = 'unreviewed'
         self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
 
-    def test_command_dispatches_only_the_commit_named_in_the_comment(self):
-        head = 'c' * 40
+    def command(self, body, commits, role='maintain', fail_dispatch_after=None):
+        head = commits[-1]
         pr = dict(state='open', head=dict(sha=head, ref='feature', repo=dict(full_name='pc2/test')),
                   user=dict(login='author'), title='Feature')
-        for body, dispatched in [(f'/hpc {head[:7]}', True), (f'  /hpc {head}\n', True),
-                                 (f'/hpc {"d" * 40}', False), ('/hpc', False), ('/hpc please', False)]:
-            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
-                event = Path(directory) / 'event.json'
-                event.write_text(json.dumps(dict(
-                    issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
-                    comment=dict(id=99, body=body, user=dict(login='maintainer')))))
-                calls = []
-                def api(path, body=None):
-                    calls.append((path, body))
-                    if path.endswith('/pulls/7'):
-                        return pr
-                    if path.endswith('/permission'):
-                        return dict(role_name='maintain')
-                    if path.endswith('/dispatches'):
-                        return dict(workflow_run_id=5)
-                    return {}
-                env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test', CB_TEST_ACTOR='')
-                with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
-                    if dispatched:
-                        hpc_command.main()
-                    else:
-                        with self.assertRaises(ValueError):
-                            hpc_command.main()
-                dispatches = [body for path, body in calls if path.endswith('/dispatches')]
-                self.assertEqual(dispatches, [dict(ref='main', inputs=dict(pull_request='7', source_sha=head),
-                                                   return_run_details=True)] if dispatched else [])
-                replies = [body['body'] for path, body in calls if path.endswith('/issues/7/comments')]
-                self.assertEqual(len(replies), 1)
-                self.assertTrue(replies[0].startswith('<!-- hpc-command:99 -->'))
-                self.assertIn(f'Authorized commit {head}' if dispatched else 'Not dispatched', replies[0])
+        calls = []
 
-    def test_command_ignores_other_comments_and_unauthorized_users(self):
+        def api(path, data=None):
+            calls.append((path, data))
+            if path.endswith('/pulls/7'):
+                return pr
+            if '/pulls/7/commits' in path:
+                page = int(path.rsplit('page=', 1)[1])
+                return [dict(sha=sha) for sha in commits[(page - 1) * 100:page * 100]]
+            if path.endswith('/permission'):
+                return dict(role_name=role)
+            if path.endswith('/dispatches'):
+                dispatched = sum(call[0].endswith('/dispatches') for call in calls)
+                if fail_dispatch_after is not None and dispatched > fail_dispatch_after:
+                    raise RuntimeError('dispatch failed')
+                return dict(workflow_run_id=dispatched)
+            return {}
+
         with tempfile.TemporaryDirectory() as directory:
             event = Path(directory) / 'event.json'
-            for body, role in [('/hpcfoo', 'maintain'), ('please run /hpc', 'maintain'), (f'/hpc {"c" * 40}', 'write')]:
-                with self.subTest(body=body):
-                    event.write_text(json.dumps(dict(
-                        issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
-                        comment=dict(id=99, body=body, user=dict(login='someone')))))
-                    pr = dict(state='open', head=dict(sha='c' * 40, ref='feature', repo=dict(full_name='pc2/test')),
-                              user=dict(login='author'), title='Feature')
-                    calls = []
-                    def api(path, body=None):
-                        calls.append(path)
-                        return pr if path.endswith('/pulls/7') else dict(role_name=role)
-                    env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test', CB_TEST_ACTOR='')
-                    with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
-                        if role == 'write':
-                            with self.assertRaisesRegex(ValueError, 'cannot authorize'):
-                                hpc_command.main()
-                        else:
-                            hpc_command.main()
-                    self.assertFalse(any(path.endswith(('/comments', '/dispatches')) for path in calls))
+            event.write_text(json.dumps(dict(
+                issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
+                comment=dict(id=99, body=body, user=dict(login='maintainer')))))
+            env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test', CB_TEST_ACTOR='')
+            error = None
+            with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
+                try:
+                    hpc_command.main()
+                except (ValueError, RuntimeError) as raised:
+                    error = raised
+        dispatched = [data['inputs']['source_sha'] for path, data in calls if path.endswith('/dispatches')]
+        replies = [data['body'] for path, data in calls if path.endswith('/issues/7/comments')]
+        return dispatched, replies, error
+
+    def test_command_dispatches_each_named_commit_of_the_pr(self):
+        commits = ['a' * 40, 'b' * 40, 'c' * 40]
+        for body, expected in [(f'/hpc {"c" * 7}', ['c' * 40]), (f'  /hpc {"c" * 40}\n', ['c' * 40]),
+                               (f'/hpc {"a" * 7} {"c" * 12} {"a" * 9}', ['a' * 40, 'c' * 40])]:
+            with self.subTest(body=body):
+                dispatched, replies, error = self.command(body, commits)
+                self.assertIsNone(error)
+                self.assertEqual(dispatched, expected)
+                self.assertEqual(len(replies), 1)
+                self.assertTrue(replies[0].startswith('<!-- hpc-command:99 -->'))
+                for sha in expected:
+                    self.assertIn(f'Authorized commit {sha}', replies[0])
+
+    def test_command_refuses_commits_outside_the_pr_without_dispatching_any(self):
+        commits = ['a' * 40, 'a' * 7 + 'b' * 33, 'd' * 40]
+        for body, reason in [(f'/hpc {"d" * 7} {"e" * 7}', 'matches no commit'),
+                             (f'/hpc {"a" * 7}', 'matches several commits'),
+                             ('/hpc', 'Name the reviewed commits'), ('/hpc please', 'seven hex characters')]:
+            with self.subTest(body=body):
+                dispatched, replies, error = self.command(body, commits)
+                self.assertIsInstance(error, ValueError)
+                self.assertEqual(dispatched, [])
+                self.assertEqual(len(replies), 1)
+                self.assertIn('Not dispatched', replies[0])
+                self.assertIn(reason, replies[0])
+                self.assertNotIn('please', replies[0])
+
+    def test_command_searches_all_pages_of_pr_commits(self):
+        commits = [f'{index:040x}' for index in range(1, 231)]
+        dispatched, _, error = self.command(f'/hpc {commits[0]}', commits)
+        self.assertIsNone(error)
+        self.assertEqual(dispatched, [commits[0]])
+
+    def test_command_announces_started_runs_when_a_later_dispatch_fails(self):
+        commits = ['a' * 40, 'b' * 40]
+        dispatched, replies, error = self.command(f'/hpc {"a" * 7} {"b" * 7}', commits, fail_dispatch_after=1)
+        self.assertIsInstance(error, RuntimeError)
+        self.assertEqual(len(replies), 1)
+        self.assertIn(f'Authorized commit {"a" * 40}', replies[0])
+        self.assertNotIn('b' * 40, replies[0])
+
+    def test_command_ignores_other_comments_and_unauthorized_users(self):
+        for body, role in [('/hpcfoo', 'maintain'), ('please run /hpc', 'maintain'), (f'/hpc {"c" * 40}', 'write')]:
+            with self.subTest(body=body):
+                dispatched, replies, error = self.command(body, ['c' * 40], role=role)
+                self.assertEqual(dispatched, [])
+                self.assertEqual(replies, [])
+                if role == 'write':
+                    self.assertRegex(str(error), 'cannot authorize')
+                else:
+                    self.assertIsNone(error)
 
     def test_pr_creation_uses_the_test_token_without_granting_it_branch_access(self):
         class CreatedPR(Exception):

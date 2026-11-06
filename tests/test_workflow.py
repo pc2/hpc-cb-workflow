@@ -316,6 +316,11 @@ if endpoint == f"repos/{os.environ['GITHUB_REPOSITORY']}":
     value = {'default_branch': os.environ['MOCK_DEFAULT_BRANCH']}
 elif '/actions/runs/' in endpoint:
     value = {'workflow_id': 88} if endpoint.endswith('/901') else json.loads(Path(os.environ['ORIGIN_RESPONSE']).read_text())
+elif endpoint.endswith('/commits') and '/pulls/' in endpoint:
+    pr = json.loads(Path(os.environ['PR_RESPONSE']).read_text())
+    for sha in [pr['head']['sha']] + os.environ.get('MOCK_PR_COMMITS', '').split():
+        print(sha)
+    sys.exit(0)
 elif '/pulls/' in endpoint:
     value = json.loads(Path(os.environ['PR_RESPONSE']).read_text())
 elif endpoint.endswith('/comments'):
@@ -415,6 +420,9 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         pr_file.write_text(json.dumps(changed))
         assert run(verify_pr).returncode != 0, key
         assert not request_log.read_text()
+    pr_file.write_text(json.dumps(pr | {'head': {'sha': 'b' * 40}}))
+    assert run(verify_pr, {'MOCK_PR_COMMITS': 'a' * 40}).returncode == 0
+    assert run(verify_pr, {'MOCK_PR_COMMITS': 'c' * 40}).returncode != 0
     pr_file.write_text(json.dumps(pr))
 
     saved = run(by_name['Save pipeline context']['run'])
