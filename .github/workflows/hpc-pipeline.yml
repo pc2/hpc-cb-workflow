@@ -481,7 +481,8 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           PIPELINE_ID: ${{ steps.identity.outputs.pipeline_id }}
           TARGET_SHA: ${{ steps.identity.outputs.sha }}
-          CHECK_PREFIX: gitlab/${{ inputs.gitlab_project_id }}/${{ steps.identity.outputs.pipeline_id }}/
+          # The pipeline ID separates pipelines of the same commit, continuation runs find their checks by this prefix.
+          CHECK_PREFIX: 'HPC ${{ steps.identity.outputs.pipeline_id }} / '
           SET_STATUS: 'false'
           CHECK_RUNS: 'true'
           SUMMARY: 'true'

@@ -160,7 +160,7 @@ jobs:
           STATUS: ${{ steps.pipeline.outputs.status }}
         run: |
           set -euo pipefail
-          prefix="gitlab/$GITLAB_PROJECT_ID/$PIPELINE_ID/"
+          prefix="HPC $PIPELINE_ID / "
           checks=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" |
             jq --arg prefix "$prefix" '[.check_runs[] | select(.name | startswith($prefix))]')
           jq -e --arg prefix "$prefix" 'any(.[]; .name == $prefix + "quick") and any(.[]; .name == $prefix + "pipeline")' <<< "$checks"

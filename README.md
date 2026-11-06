@@ -42,6 +42,7 @@ The [manual example](examples/manual.yml) and [benchmark example](examples/bench
 Replace `REVIEWED_COMMIT` with the published workflow commit.
 The four dispatch inputs are required, continuation dispatches the caller with `context_run_id` and the PR command dispatches it with `pull_request`, `source_sha` and `command_comment`.
 The workflow reads them from the dispatch, so the caller only declares them.
+The Actions form lists inputs in declaration order, so declare the caller's own options first.
 GitLab reads `.gitlab-ci.yml` from the mirrored commit, so it lives in the caller repository.
 
 ```yaml
@@ -50,13 +51,13 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      context_run_id:
-        type: string
-        default: ''
       pull_request:
         type: string
         default: ''
       source_sha:
+        type: string
+        default: ''
+      context_run_id:
         type: string
         default: ''
       command_comment:
@@ -115,7 +116,7 @@ The `pipeline_status` output exposes the verified GitLab status after collection
 
 Start force pushes the selected commit to the same branch on GitLab and triggers one pipeline.
 Only the first attempt of a new run may start a pipeline, reruns reuse the saved context artifact.
-Wait verifies the pipeline identity and mirrors job results as check runs named after the project and pipeline IDs.
+Wait verifies the pipeline identity and mirrors job results as check runs named `HPC <pipeline> / <job>`, the pipeline ID separates pipelines of the same commit.
 Jobs of child pipelines in the same project appear as `<trigger job>/<job>`.
 GitLab outages up to thirty minutes are retried, an outage reaching `max_wait_minutes` hands over to the next run.
 After `max_wait_minutes` it dispatches the caller on the default branch again with `context_run_id`, so monitoring may outlast the six hour job limit.

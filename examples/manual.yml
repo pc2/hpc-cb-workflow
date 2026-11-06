@@ -1,22 +1,26 @@
 name: HPC CB
+run-name: >-
+  ${{ inputs.context_run_id && format('HPC resume {0}', inputs.context_run_id)
+  || inputs.pull_request && format('HPC PR {0} {1}', inputs.pull_request, inputs.source_sha)
+  || 'HPC CB' }}
 
 on:
   workflow_dispatch:
     inputs:
-      context_run_id:
-        description: The original GitHub run, leave empty to start jobs.
-        type: string
-        default: ''
       pull_request:
-        description: An optional PR whose head is the selected commit.
+        description: Leave empty, or a PR number to run a reviewed commit of that PR.
         type: string
         default: ''
       source_sha:
-        description: The reviewed PR head commit.
+        description: Leave empty, or the full hash of the reviewed PR commit.
+        type: string
+        default: ''
+      context_run_id:
+        description: Leave empty, set by continuation or for a manual resume.
         type: string
         default: ''
       command_comment:
-        description: The PR comment that authorized the run, set by the HPC command.
+        description: Leave empty, set by the PR command.
         type: string
         default: ''
 

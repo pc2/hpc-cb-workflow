@@ -211,7 +211,7 @@ assert by_name['Follow GitLab jobs']['env']['MAX_WAIT_MINUTES'] == '${{ inputs.m
 assert by_name['Verify context source']['env']['MAX_WAIT_MINUTES'] == '${{ inputs.max_wait_minutes }}'
 assert by_name['Collect GitLab artifacts']['env']['PIPELINE_ID'] == '${{ env.PIPELINE_ID }}'
 assert by_name['Follow GitLab jobs']['env']['TARGET_SHA'] == '${{ steps.identity.outputs.sha }}'
-assert 'steps.identity.outputs.pipeline_id' in by_name['Follow GitLab jobs']['env']['CHECK_PREFIX']
+assert by_name['Follow GitLab jobs']['env']['CHECK_PREFIX'] == 'HPC ${{ steps.identity.outputs.pipeline_id }} / '
 assert by_name['Follow GitLab jobs']['env']['SET_STATUS'] == 'false'
 assert by_name['Follow GitLab jobs']['env']['STOP_ON_MANUAL'] == 'true'
 checkout = by_name['Check out the selected commit']
