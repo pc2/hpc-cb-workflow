@@ -32,8 +32,7 @@ function benchmark()
         @printf(output, "\"cpu\":%s,\"blas\":%s}\n", repr(Sys.CPU_NAME), repr(string(BLAS.get_config())))
     end
     open("results/benchmark-action.json", "w") do output
-        name = "linear_solve_512/$(Sys.CPU_NAME)/Julia-$(VERSION)/BLAS-$(BLAS.vendor())/threads-1"
-        @printf(output, "[{\"name\":%s,\"unit\":\"seconds\",\"value\":%.17g}]\n", repr(name), median(samples))
+        @printf(output, "[{\"name\":\"linear_solve_512\",\"unit\":\"seconds\",\"value\":%.17g}]\n", median(samples))
     end
     println("Median linear solve time, ", median(samples), " seconds.")
 end

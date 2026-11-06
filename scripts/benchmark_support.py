@@ -129,8 +129,8 @@ def prepare():
         if not contents.startswith(prefix):
             raise ValueError('Unexpected benchmark history format.')
         history = json.loads(contents[len(prefix):].strip().rstrip(';'))
-    baseline = next((entry for entry in reversed(history.get('entries', {}).get(suite['name'], []))
-                     if entry['commit']['id'] != context['sha']), None)
+    entries = history.get('entries', {}).get(suite['name'], [])
+    baseline = next((entry for entry in reversed(entries) if entry['commit']['id'] != context['sha']), None)
     if not record and not previous and baseline is None:
         raise ValueError('No comparable baseline with a different commit exists.')
     if baseline and baseline.get('tool') != tool:
@@ -142,7 +142,7 @@ def prepare():
                 raise ValueError('Benchmark names and units must match the baseline.')
     state = dict(context=context, config=config, suite=suite, branch=branch, directory=directory,
                  record=record, key=key, ledger=ledger, previous=previous,
-                 receipt_name=receipt_name, baseline_data=baseline,
+                 receipt_name=receipt_name, baseline_data=baseline, entries=len(entries),
                  baseline=baseline['commit']['id'] if baseline else None)
     (Path(os.environ['RUNNER_TEMP']) / 'benchmark-state.json').write_text(json.dumps(state))
     output(tool=tool, name=suite['name'], file=result, directory=directory,
@@ -163,8 +163,10 @@ def finish():
     else:
         generated = (Path(state['directory']) / 'data.js').read_text()
         data = json.loads(generated.removeprefix('window.BENCHMARK_DATA = ').strip().rstrip(';'))
-        current = data['entries'][suite['name']][-1]
-        if current['commit']['id'] != context['sha']:
+        entries = data['entries'][suite['name']]
+        current = entries[-1]
+        # An earlier entry of the same commit must not pass as this measurement.
+        if len(entries) != state['entries'] + 1 or current['commit']['id'] != context['sha']:
             raise ValueError('The benchmark action did not produce the expected measurement.')
         previous = {b['name']: b for b in (state['baseline_data'] or {}).get('benches', [])}
         if previous and any(b['name'] not in previous or previous[b['name']]['unit'] != b['unit']
