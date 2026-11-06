@@ -482,7 +482,9 @@ jobs:
           PIPELINE_ID: ${{ steps.identity.outputs.pipeline_id }}
           TARGET_SHA: ${{ steps.identity.outputs.sha }}
           # The pipeline ID separates pipelines of the same commit, continuation runs find their checks by this prefix.
-          CHECK_PREFIX: 'HPC ${{ steps.identity.outputs.pipeline_id }} / '
+          CHECK_PREFIX: 'HPC #${{ steps.identity.outputs.pipeline_id }} / '
+          # The bare prefix sorts before its job checks, so the pipeline summary leads the list.
+          PIPELINE_CHECK_NAME: 'HPC #${{ steps.identity.outputs.pipeline_id }}'
           SET_STATUS: 'false'
           CHECK_RUNS: 'true'
           SUMMARY: 'true'

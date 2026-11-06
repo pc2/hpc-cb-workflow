@@ -116,7 +116,8 @@ The `pipeline_status` output exposes the verified GitLab status after collection
 
 Start force pushes the selected commit to the same branch on GitLab and triggers one pipeline.
 Only the first attempt of a new run may start a pipeline, reruns reuse the saved context artifact.
-Wait verifies the pipeline identity and mirrors job results as check runs named `HPC <pipeline> / <job>`, the pipeline ID separates pipelines of the same commit.
+Wait verifies the pipeline identity and mirrors job results as check runs named `HPC #<pipeline> / <job>`, the pipeline ID separates pipelines of the same commit.
+The pipeline check `HPC #<pipeline>` holds the job table and sorts before its job checks.
 Jobs of child pipelines in the same project appear as `<trigger job>/<job>`.
 GitLab outages up to thirty minutes are retried, an outage reaching `max_wait_minutes` hands over to the next run.
 After `max_wait_minutes` it dispatches the caller on the default branch again with `context_run_id`, so monitoring may outlast the six hour job limit.

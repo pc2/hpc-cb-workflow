@@ -160,16 +160,17 @@ jobs:
           STATUS: ${{ steps.pipeline.outputs.status }}
         run: |
           set -euo pipefail
-          prefix="HPC $PIPELINE_ID / "
+          prefix="HPC #$PIPELINE_ID / "
+          pipeline="HPC #$PIPELINE_ID"
           checks=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs?per_page=100" |
-            jq --arg prefix "$prefix" '[.check_runs[] | select(.name | startswith($prefix))]')
-          jq -e --arg prefix "$prefix" 'any(.[]; .name == $prefix + "quick") and any(.[]; .name == $prefix + "pipeline")' <<< "$checks"
+            jq --arg prefix "$prefix" --arg pipeline "$pipeline" '[.check_runs[] | select((.name | startswith($prefix)) or .name == $pipeline)]')
+          jq -e --arg prefix "$prefix" --arg pipeline "$pipeline" 'any(.[]; .name == $prefix + "quick") and any(.[]; .name == $pipeline)' <<< "$checks"
           if [[ $COLLECTED == true ]]; then
             conclusion=success
             if [[ $STATUS == failed ]]; then
               conclusion=failure
             fi
-            jq -e --arg name "${prefix}pipeline" --arg conclusion "$conclusion" \
+            jq -e --arg name "$pipeline" --arg conclusion "$conclusion" \
               'any(.[]; .name == $name and .status == "completed" and .conclusion == $conclusion)' <<< "$checks"
           fi
       - name: Verify the continuation run
