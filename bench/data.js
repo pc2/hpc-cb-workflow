@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793975576763,
+  "lastUpdate": 1793979279817,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Julia linear solve": [
@@ -260,6 +260,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "linear_solve_512",
             "value": 0.001648709,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gerrit.pape@uni-paderborn.de",
+            "name": "Gerrit Pape",
+            "username": "papeg"
+          },
+          "committer": {
+            "email": "gerrit.pape@uni-paderborn.de",
+            "name": "Gerrit Pape",
+            "username": "papeg"
+          },
+          "distinct": true,
+          "id": "34915999cf86ff50ce7fa449ea0d037723a4494c",
+          "message": "set the expected commit in the workflow\n\n- Inject EXPECTED_COMMIT_SHA for the selected commit and reject malformed or duplicate pipeline variables\n- Name both commits when GitLab runs another commit than selected\n- Drop EXPECTED_COMMIT_SHA from the callers and examples\n- Remove the test account exception from the PR command\n- Ask to review earlier commits on their own before naming them\n- Pin github2lab_action to 74a6aac",
+          "timestamp": "2026-11-06T16:32:24+01:00",
+          "tree_id": "a65d93f21a67a17431515b43f80abc09e07dc2c9",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/34915999cf86ff50ce7fa449ea0d037723a4494c"
+        },
+        "date": 1793979279808,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "linear_solve_512",
+            "value": 0.001971864,
             "unit": "seconds"
           }
         ]
