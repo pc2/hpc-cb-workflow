@@ -78,6 +78,19 @@ def verify_report(repo, pr, sha, expected):
     return reports[0]['id']
 
 
+def command(repo, pr, body):
+    """Posts an HPC command as the test account and returns the reply without its marker."""
+    comment = api(f'repos/{repo}/issues/{pr}/comments', dict(body=body), token=os.environ['CB_TEST_TOKEN'])
+    marker = f'<!-- hpc-command:{comment["id"]} -->'
+    for _ in range(60):
+        replies = [c for c in comments(repo, pr) if c['user']['login'] == 'github-actions[bot]' and
+                   c['body'].startswith(marker)]
+        if replies:
+            return replies[0]['body'].removeprefix(marker).strip()
+        time.sleep(10)
+    raise AssertionError(f'The command {body} got no reply.')
+
+
 def run(state_path):
     token = os.environ.get('CB_TEST_TOKEN')
     if not token:
@@ -109,18 +122,20 @@ def run(state_path):
                  token=token)['number']
         state[-1]['pr'] = pr
         state_path.write_text(json.dumps(state))
-        comment = api(f'repos/{repo}/issues/{pr}/comments', dict(body=f'/hpc {commit}'),
-                      token=os.environ['CB_TEST_TOKEN'])
-        origin = None
-        for _ in range(60):
-            replies = [c for c in comments(repo, pr) if c['user']['login'] == 'github-actions[bot]' and
-                       c['body'].startswith(f'<!-- hpc-command:{comment["id"]} -->')]
-            if replies:
-                origin = int(re.search(r'/actions/runs/([0-9]+)', replies[0]['body'])[1])
-                break
-            time.sleep(10)
-        if not origin:
-            raise AssertionError('The comment did not dispatch the HPC workflow.')
+        if scenario == 'pass':
+            # GitHub must reject an option the caller does not declare, before any run starts.
+            reply = command(repo, pr, f'/hpc {commit} undeclared=1')
+            if not reply.startswith('Not dispatched') or '/actions/runs/' in reply:
+                raise AssertionError('An undeclared option was not refused.')
+        options = ' label=option-check' if scenario == 'pass' else ''
+        reply = command(repo, pr, f'/hpc {commit}{options}')
+        match = re.search(r'/actions/runs/([0-9]+)', reply)
+        if not match:
+            raise AssertionError(f'The comment did not dispatch the HPC workflow: {reply}')
+        origin = int(match[1])
+        title = api(f'repos/{repo}/actions/runs/{origin}')['display_title']
+        if title != f'PR benchmark {pr} {commit} {"option-check" if options else "none"}':
+            raise AssertionError(f'The command options did not reach the run: {title}')
         result = wait_run(repo, origin, expected)
         if result['id'] == origin:
             raise AssertionError('The PR test did not exercise continuation.')

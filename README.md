@@ -100,7 +100,7 @@ workflow:
 | `gitlab_project_id` | The numeric GitLab project ID. |
 | `pipeline_variables` | Pipeline variables, one `KEY=VALUE` per line. |
 | `context_run_id` | The original GitHub run, used to resume monitoring. |
-| `pull_request` | An optional PR whose head is the selected commit. |
+| `pull_request` | An optional open PR that contains the selected commit. |
 | `source_sha` | A reviewed commit of the PR, verified against `pull_request`. |
 | `benchmark` | Benchmark publication configuration as JSON, see below. |
 | `expected_pipeline_status` | The required terminal status, `success` by default, `failed` for deliberate failure tests. |
@@ -182,6 +182,34 @@ The reply names the authorized commits or the reasons for refusing.
 Results appear as check runs on each commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
 GitHub shows checks of earlier commits on the commit pages, not in the PR view.
 The same run can be dispatched by hand with `pull_request` and `source_sha`.
+
+Options after the commits select what runs, `/hpc <commit> suite=gpu` applies to all named commits.
+Each option is a `workflow_dispatch` input of the caller with the same name, so the comment and the Actions form use the same names.
+Options grant nothing beyond a manual dispatch, which the authorized roles can start anyway.
+The command refuses `pull_request`, `source_sha` and `context_run_id`, values allow letters, digits and `._:/+-`.
+GitHub rejects inputs the caller does not declare, and the reply relays the rejection.
+Declare options as `type: choice` to restrict their values, and forward them explicitly as pipeline variables.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        type: choice
+        options: [all, cpu, gpu]
+        default: all
+
+jobs:
+  hpc:
+    with:
+      pipeline_variables: |
+        EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
+        SUITE=${{ inputs.suite || 'all' }}
+```
+
+GitLab rules such as `if: $SUITE == "all" || $SUITE == "gpu"` then select the jobs.
+A caller with benchmarks must only list suites whose jobs run for the selected options.
+Continuation runs keep the variables and benchmark configuration of the original start.
 Leave `CB_TEST_ACTOR` unset outside this repository.
 
 ## Development
@@ -207,6 +235,7 @@ A failing suite still records its point, Pages are redeployed from the branch re
 The continuation path runs from the default branch, merge changes to it before testing `handover`.
 
 The PR command test creates passing and failing draft PRs, posts `/hpc <commit>`, verifies continuation, reports and retries, then closes the PRs.
+It also verifies that an undeclared option is refused and that a declared option reaches the run.
 It needs the following settings in this repository.
 
 | Setting | Type | Value |

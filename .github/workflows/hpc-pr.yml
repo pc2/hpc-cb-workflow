@@ -1,5 +1,5 @@
 name: PR benchmark
-run-name: ${{ inputs.context_run_id && format('PR benchmark resume {0}', inputs.context_run_id) || format('PR benchmark {0} {1}', inputs.pull_request, inputs.source_sha) }}
+run-name: ${{ inputs.context_run_id && format('PR benchmark resume {0}', inputs.context_run_id) || format('PR benchmark {0} {1} {2}', inputs.pull_request, inputs.source_sha, inputs.label) }}
 
 on:
   workflow_dispatch:
@@ -16,6 +16,11 @@ on:
         description: The original run to resume.
         type: string
         default: ''
+      label:
+        description: A run label, the PR command test sets it to verify command options.
+        type: choice
+        options: [none, option-check]
+        default: none
 
 permissions:
   contents: write

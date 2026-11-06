@@ -71,7 +71,7 @@ class BenchmarkTests(unittest.TestCase):
         pr['head']['ref'] = 'unreviewed'
         self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
 
-    def command(self, body, commits, role='maintain', fail_dispatch_after=None):
+    def command(self, body, commits, role='maintain', fail_dispatch_after=None, reject=None):
         head = commits[-1]
         pr = dict(state='open', head=dict(sha=head, ref='feature', repo=dict(full_name='pc2/test')),
                   user=dict(login='author'), title='Feature')
@@ -88,6 +88,8 @@ class BenchmarkTests(unittest.TestCase):
                 return dict(role_name=role)
             if path.endswith('/dispatches'):
                 dispatched = sum(call[0].endswith('/dispatches') for call in calls)
+                if reject and dispatched > reject[0]:
+                    raise subprocess.CalledProcessError(1, 'gh', stderr=reject[1])
                 if fail_dispatch_after is not None and dispatched > fail_dispatch_after:
                     raise RuntimeError('dispatch failed')
                 return dict(workflow_run_id=dispatched)
@@ -103,11 +105,55 @@ class BenchmarkTests(unittest.TestCase):
             with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
                 try:
                     hpc_command.main()
-                except (ValueError, RuntimeError) as raised:
+                except (ValueError, RuntimeError, subprocess.CalledProcessError) as raised:
                     error = raised
-        dispatched = [data['inputs']['source_sha'] for path, data in calls if path.endswith('/dispatches')]
+        self.inputs = [data['inputs'] for path, data in calls if path.endswith('/dispatches')]
+        rejected = reject[0] if reject else len(self.inputs)
+        dispatched = [inputs['source_sha'] for inputs in self.inputs[:rejected]]
         replies = [data['body'] for path, data in calls if path.endswith('/issues/7/comments')]
         return dispatched, replies, error
+
+    def test_command_options_reach_every_dispatch_as_inputs(self):
+        commits = ['a' * 40, 'c' * 40]
+        dispatched, replies, error = self.command(f'/hpc suite=gpu {"a" * 7} {"c" * 7} threads=4', commits)
+        self.assertIsNone(error)
+        self.assertEqual(dispatched, commits)
+        self.assertTrue(all(inputs['suite'] == 'gpu' and inputs['threads'] == '4' for inputs in self.inputs))
+        self.assertEqual(replies[0].count('with suite=gpu threads=4'), 2)
+
+    def test_command_refuses_invalid_options_without_dispatching(self):
+        for body, reason in [(f'/hpc {"c" * 7} source_sha={"d" * 40}', 'set by the command itself'),
+                             (f'/hpc {"c" * 7} context_run_id=5', 'set by the command itself'),
+                             (f'/hpc {"c" * 7} suite=cpu suite=gpu', 'given twice'),
+                             (f'/hpc {"c" * 7} suite=a;b', 'name=value'), (f'/hpc {"c" * 7} 1suite=a', 'name=value'),
+                             (f'/hpc {"c" * 7} suite=', 'name=value'), ('/hpc suite=gpu', 'Name the reviewed commits')]:
+            with self.subTest(body=body):
+                dispatched, replies, error = self.command(body, ['c' * 40])
+                self.assertIsInstance(error, ValueError)
+                self.assertEqual(self.inputs, [])
+                self.assertIn('Not dispatched', replies[0])
+                self.assertIn(reason, replies[0])
+                self.assertNotIn(';', replies[0])
+
+    def test_command_relays_a_rejection_of_the_first_dispatch(self):
+        dispatched, replies, error = self.command(
+            f'/hpc {"a" * 7} {"c" * 7} undeclared=1', ['a' * 40, 'c' * 40],
+            reject=(0, 'gh: Unexpected inputs provided: ["undeclared"] (HTTP 422)\n'))
+        self.assertIsInstance(error, ValueError)
+        self.assertEqual(dispatched, [])
+        self.assertEqual(len(self.inputs), 1)
+        self.assertEqual(len(replies), 1)
+        self.assertIn('Not dispatched', replies[0])
+        self.assertIn('Unexpected inputs provided', replies[0])
+
+    def test_command_announces_started_runs_when_a_later_dispatch_is_rejected(self):
+        dispatched, replies, error = self.command(f'/hpc {"a" * 7} {"c" * 7}', ['a' * 40, 'c' * 40],
+                                                  reject=(1, 'gh: Server Error (HTTP 500)'))
+        self.assertIsInstance(error, subprocess.CalledProcessError)
+        self.assertEqual(dispatched, ['a' * 40])
+        self.assertEqual(len(replies), 1)
+        self.assertIn(f'Authorized commit {"a" * 40}', replies[0])
+        self.assertNotIn('Not dispatched', replies[0])
 
     def test_command_dispatches_each_named_commit_of_the_pr(self):
         commits = ['a' * 40, 'b' * 40, 'c' * 40]
