@@ -58,27 +58,11 @@ class BenchmarkTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 benchmark.relative_path(path)
 
-    def test_test_account_is_restricted_to_generated_prs(self):
-        pr = dict(user=dict(login='user'), title='HPC integration test pass',
-                  head=dict(repo=dict(full_name='pc2/test'), ref='hpc-test/12-1/pass'))
-        self.assertTrue(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
-        self.assertFalse(hpc_command.authorized_test_pr(pr, 'other', 'user', 'pc2/test'))
-        self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', '', 'pc2/test'))
-        self.assertTrue(hpc_command.authorized_test_pr(pr, 'USER', 'User', 'pc2/test'))
-        for author in ('other', 'github-actions[bot]'):
-            self.assertFalse(hpc_command.authorized_test_pr(pr | {'user': {'login': author}},
-                                                          'user', 'user', 'pc2/test'))
-        pr['head']['ref'] = 'unreviewed'
-        self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
-
     def command(self, body, commits, role='maintain', fail_dispatch_after=None, reject=None,
-                permission='write', test_actor=False):
+                permission='write'):
         head = commits[-1]
         pr = dict(state='open', head=dict(sha=head, ref='feature', repo=dict(full_name='pc2/test')),
                   user=dict(login='author'), title='Feature')
-        if test_actor:
-            pr.update(user=dict(login='maintainer'), title='HPC integration test pass')
-            pr['head']['ref'] = 'hpc-test/12-1/pass'
         calls = []
 
         def api(path, data=None):
@@ -90,8 +74,6 @@ class BenchmarkTests(unittest.TestCase):
                 return [dict(sha=sha) for sha in commits[(page - 1) * 100:page * 100]]
             if path.endswith('/permission'):
                 return dict(role_name=role, permission=permission)
-            if '/pulls/7/files' in path:
-                return [dict(filename='benchmarks/pr-fixture.json')]
             if path.endswith('/dispatches'):
                 dispatched = sum(call[0].endswith('/dispatches') for call in calls)
                 if reject and dispatched > reject[0]:
@@ -106,8 +88,7 @@ class BenchmarkTests(unittest.TestCase):
             event.write_text(json.dumps(dict(
                 issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
                 comment=dict(id=99, body=body, user=dict(login='maintainer')))))
-            env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test',
-                       CB_TEST_ACTOR='maintainer' if test_actor else '')
+            env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test')
             error = None
             with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
                 try:
@@ -250,17 +231,15 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertIsNone(error)
                 self.assertEqual(dispatched, ['c' * 40])
 
-    def test_command_rejects_users_without_write_access_including_the_test_actor(self):
+    def test_command_rejects_users_without_write_access(self):
         for role, permission in [('read', 'read'), ('triage', 'read'), ('none', 'none'),
                                  ('custom_reader', 'read'), ('admin', None)]:
-            for test_actor in (False, True):
-                with self.subTest(role=role, test_actor=test_actor):
-                    dispatched, replies, error = self.command(f'/hpc {"c" * 40}', ['c' * 40],
-                                                            role=role, permission=permission,
-                                                            test_actor=test_actor)
-                    self.assertEqual(dispatched, [])
-                    self.assertEqual(replies, [])
-                    self.assertRegex(str(error), 'needs repository write access')
+            with self.subTest(role=role):
+                dispatched, replies, error = self.command(f'/hpc {"c" * 40}', ['c' * 40],
+                                                        role=role, permission=permission)
+                self.assertEqual(dispatched, [])
+                self.assertEqual(replies, [])
+                self.assertRegex(str(error), 'needs repository write access')
 
     def test_waiting_tolerates_a_job_list_that_lags_behind_the_completed_run(self):
         run = dict(id=5, status='completed', conclusion='failure', run_attempt=2, html_url='run')

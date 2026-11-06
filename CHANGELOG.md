@@ -5,7 +5,7 @@
 Optional benchmark suites use github-action-benchmark for history and regression checks.
 Reviewed PR commits can run through the trusted default branch caller.
 The command integration test verifies PR creation, comments, continuation and reporting retries.
-The CB_TEST_TOKEN secret and CB_TEST_ACTOR variable configure command testing.
+The CB_TEST_TOKEN secret and CB_TEST_ACTOR variable configure command testing, the command treats the test account like any user.
 
 The integration suite verifies success, failure and both handover outcomes.
 A Julia measurement follows the GitLab artifact path into GitHub Pages history.

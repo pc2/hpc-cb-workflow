@@ -15,14 +15,6 @@ def api(path, body=None):
     return json.loads(result.stdout) if result.stdout else None
 
 
-def authorized_test_pr(pr, login, expected_login, repo):
-    return bool(expected_login and login.lower() == expected_login.lower() and
-                pr['user']['login'].lower() == expected_login.lower() and
-                pr['head']['repo']['full_name'] == repo and
-                re.fullmatch(r'hpc-test/[0-9]+-[0-9]+/(pass|fail)', pr['head']['ref']) and
-                pr['title'].startswith('HPC integration test '))
-
-
 def pr_commits(repo, number):
     commits = []
     # GitHub lists at most 250 commits of a PR.
@@ -89,11 +81,6 @@ def main():
     permission = api(f'repos/{repo}/collaborators/{login}/permission').get('permission')
     if permission not in ('write', 'admin'):
         raise ValueError('The commenter needs repository write access to authorize cluster execution.')
-    test = authorized_test_pr(pr, login, os.environ.get('CB_TEST_ACTOR', ''), repo)
-    if test:
-        files = api(f'repos/{repo}/pulls/{number}/files?per_page=100')
-        if len(files) != 1 or files[0]['filename'] != 'benchmarks/pr-fixture.json':
-            raise ValueError('The integration PR changed files outside its fixture.')
     # The comment names the reviewed commits, the PR may have received others since the review.
     commits = pr_commits(repo, number)
     if not all(re.fullmatch(r'[0-9a-f]{40}', sha) for sha in commits + [pr['head']['sha']]):

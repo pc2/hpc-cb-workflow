@@ -190,6 +190,7 @@ It verifies the commenter's repository write access and dispatches `CB_COMMAND_W
 The start job checks the comment author for repository write access again.
 Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.
+Review each earlier commit on its own before naming it, a later commit can hide what an earlier one changes.
 If any hash is incomplete or names a commit outside the PR, nothing is dispatched.
 The reply names the authorized commits or the reasons for refusing.
 Results appear as check runs on each commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
@@ -223,7 +224,6 @@ jobs:
 GitLab rules such as `if: $SUITE == "all" || $SUITE == "gpu"` then select the jobs.
 A caller with benchmarks must only list suites whose jobs run for the selected options.
 Continuation runs keep the variables and benchmark configuration of the original start.
-Leave `CB_TEST_ACTOR` unset outside this repository.
 
 ## Development
 
@@ -257,5 +257,4 @@ It needs the following settings in this repository.
 | `CB_TEST_ACTOR` | Actions variable. | The GitHub username owning the token. |
 
 PRs created with the workflow token would need manual approval before their checks run, PRs created with the supplied token do not.
-The test actor may use the command only on generated PRs changing `benchmarks/pr-fixture.json`.
-The command and start job require repository write access for the test actor.
+The test account comments like any other user, so it needs repository write access.
