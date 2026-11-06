@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793979289062,
+  "lastUpdate": 1793982079632,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Regression fixture": [
@@ -264,6 +264,33 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/pc2/hpc-cb-workflow/commit/34915999cf86ff50ce7fa449ea0d037723a4494c"
         },
         "date": 1793979289053,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "controlled measurement",
+            "value": 100,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "committer": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "id": "4def4507b34918a44355041328d3310e5a610240",
+          "message": "make the PR command a reusable workflow",
+          "timestamp": "2026-11-06T16:18:51Z",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/4def4507b34918a44355041328d3310e5a610240"
+        },
+        "date": 1793982079623,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
