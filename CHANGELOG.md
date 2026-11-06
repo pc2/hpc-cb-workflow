@@ -25,6 +25,7 @@ The variable_patterns input restricts the values of pipeline variables before an
 The start job warns about callers that cannot continue, skips unconfigured forks and fails on unsupported events.
 Artifact collection has a configurable time limit and uploads the archives without compressing them again.
 Job checks are named HPC <pipeline> / <job> instead of gitlab/<project>/<pipeline>/<job>.
+The collect job also reports PR runs that failed earlier, the separate failure job is gone.
 Benchmark reports mark each measurement as ok, warning or failure and count warnings in the check title, the action's duplicate job summary is off.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.
 GitLab outages are retried during monitoring and continuation dispatches are retried.

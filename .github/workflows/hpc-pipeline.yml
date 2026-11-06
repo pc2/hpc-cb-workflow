@@ -526,24 +526,30 @@ jobs:
   collect:
     name: Collect results
     needs: wait
-    if: ${{ !cancelled() && needs.wait.outputs.finished == 'true' }}
+    # A finished pipeline is collected, a PR run that failed before reaching this job is reported to the PR instead.
+    if: >-
+      ${{ !cancelled() && (needs.wait.outputs.finished == 'true' ||
+      (failure() && (inputs.pull_request || github.event.inputs.pull_request) != '')) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ fromJSON(inputs.collect_timeout_minutes) }}
     outputs:
       pipeline_status: ${{ steps.identity.outputs.status }}
     permissions:
       contents: read
+      actions: read
       pull-requests: write
     concurrency:
-      group: hpc-collect-${{ github.repository }}-${{ inputs.gitlab_project_id }}-${{ needs.wait.outputs.pipeline_id }}
+      group: hpc-collect-${{ github.repository }}-${{ inputs.gitlab_project_id }}-${{ needs.wait.outputs.pipeline_id || github.run_id }}
       cancel-in-progress: false
     env:
+      FINISHED: ${{ needs.wait.outputs.finished }}
       PIPELINE_ID: ${{ needs.wait.outputs.pipeline_id }}
       EXPECTED_SHA: ${{ needs.wait.outputs.sha }}
       PIPELINE_REF: ${{ needs.wait.outputs.ref }}
       PR: ${{ needs.wait.outputs.pull_request }}
     steps:
       - name: Verify completed pipeline
+        if: env.FINISHED == 'true'
         id: identity
         shell: bash
         env:
@@ -560,6 +566,7 @@ jobs:
               and (.status | IN("success", "failed", "canceled", "skipped", "manual"))' <<< "$pipeline"
           printf 'status=%s\nweb_url=%s\n' "$(jq -r .status <<< "$pipeline")" "$(jq -r .web_url <<< "$pipeline")" >> "$GITHUB_OUTPUT"
       - name: Prepare artifact download
+        if: env.FINISHED == 'true'
         shell: bash
         working-directory: ${{ runner.temp }}
         run: |
@@ -580,6 +587,7 @@ jobs:
             -r "$RUNNER_TEMP/github2lab-python/requirements.txt"
           echo "$RUNNER_TEMP/github2lab-python/bin" >> "$GITHUB_PATH"
       - name: Collect GitLab artifacts
+        if: env.FINISHED == 'true'
         id: artifacts
         uses: pc2/github2lab_action@74a6aac30255fabf1717a7842bd5c2c3ae9b18ee
         env:
@@ -648,19 +656,8 @@ jobs:
             fail "The GitLab pipeline finished with $STATUS, expected $EXPECTED_PIPELINE_STATUS."
           [[ $DOWNLOAD_OUTCOME == success ]] || fail 'Downloading the GitLab artifacts failed, see the Collect GitLab artifacts step.'
           [[ $UPLOAD_OUTCOME == success ]] || fail 'Uploading the artifacts to GitHub failed, see the Upload GitLab artifacts step.'
-
-  failure:
-    name: Report a failed run to the PR
-    needs: [start, wait]
-    # Collection reports finished pipelines, this job reports runs that end before collection.
-    if: ${{ failure() && (inputs.pull_request || github.event.inputs.pull_request) != '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      actions: read
-      pull-requests: write
-    steps:
-      - name: Comment on the PR
+      - name: Report a failed run to the PR
+        if: env.FINISHED != 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

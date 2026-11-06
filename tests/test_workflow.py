@@ -20,7 +20,7 @@ suite = yaml.load((root / '.github/workflows/integration-suite.yml').read_text()
 history = yaml.load((root / '.github/workflows/benchmark-history.yml').read_text(), Loader=yaml.BaseLoader)
 gitlab_ci = yaml.load((root / '.gitlab-ci.yml').read_text(), Loader=yaml.BaseLoader)
 jobs = workflow['jobs']
-assert set(jobs) == {'start', 'wait', 'collect', 'failure', 'benchmark', 'pages'}
+assert set(jobs) == {'start', 'wait', 'collect', 'benchmark', 'pages'}
 steps = [step for job in jobs.values() for step in job.get('steps', [])]
 by_name = {step['name']: step for step in steps}
 action_revisions = {step['uses'].split('@')[1] for step in steps
@@ -159,7 +159,7 @@ def test_retries_monitor_saved_context_without_starting_pipelines():
 test_retries_monitor_saved_context_without_starting_pipelines()
 assert "needs.wait.outputs.finished == 'true'" in jobs['collect']['if']
 assert jobs['wait']['permissions'] == {'actions': 'write', 'checks': 'write'}
-assert jobs['collect']['permissions'] == {'contents': 'read', 'pull-requests': 'write'}
+assert jobs['collect']['permissions'] == {'contents': 'read', 'actions': 'read', 'pull-requests': 'write'}
 assert jobs['collect']['concurrency']['cancel-in-progress'] == 'false'
 assert 'needs.wait.outputs.pipeline_id' in jobs['collect']['concurrency']['group']
 for environment in [workflow['env'], *(job.get('env', {}) for job in jobs.values())]:
@@ -175,7 +175,7 @@ assert 'env' not in prepare
 token_scopes = {
     'Authorize the run': {'GH_TOKEN'},
     'Check continuation': {'GH_TOKEN'},
-    'Comment on the PR': {'GH_TOKEN'},
+    'Report a failed run to the PR': {'GH_TOKEN'},
     'Validate configuration': {'GITLAB_TOKEN', 'GITLAB_TRIGGER_TOKEN'},
     'Push the selected commit to GitLab': {'GITLAB_TOKEN'},
     'Start GitLab pipeline': {'GITLAB_TRIGGER_TOKEN'},
@@ -603,11 +603,17 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     test_continuation_problems_are_reported_at_start()
 
     def test_runs_failing_before_collection_are_reported_to_the_pr():
-        failure = jobs['failure']
-        assert failure['needs'] == ['start', 'wait']
-        assert "failure()" in failure['if'] and 'github.event.inputs.pull_request' in failure['if']
-        assert failure['permissions'] == {'actions': 'read', 'pull-requests': 'write'}
-        comment = by_name['Comment on the PR']['run']
+        collect = jobs['collect']
+        assert "needs.wait.outputs.finished == 'true' ||" in collect['if']
+        assert "failure()" in collect['if'] and 'github.event.inputs.pull_request' in collect['if']
+        assert collect['permissions'] == {'contents': 'read', 'actions': 'read', 'pull-requests': 'write'}
+        assert collect['concurrency']['group'].endswith("${{ needs.wait.outputs.pipeline_id || github.run_id }}")
+        guarded = {step['name']: step['if'] for step in collect['steps']}
+        for name in ('Verify completed pipeline', 'Prepare artifact download', 'Collect GitLab artifacts'):
+            assert guarded[name] == "env.FINISHED == 'true'", name
+        assert guarded['Report a failed run to the PR'] == "env.FINISHED != 'true'"
+        assert collect['steps'][-1]['name'] == 'Report a failed run to the PR'
+        comment = by_name['Report a failed run to the PR']['run']
         failed_jobs = {'jobs': [{'name': 'hpc / Start on GitLab', 'conclusion': 'failure',
                                  'steps': [{'name': 'Validate configuration', 'conclusion': 'success'},
                                            {'name': 'Verify PR commit', 'conclusion': 'failure'}]}]}
