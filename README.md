@@ -174,6 +174,7 @@ The first recording fixes the measurement names and units of a suite, a changed 
 The action compares against the latest recorded result of the suite from a different commit, it does not rerun the baseline.
 A run on the default branch must record the first baseline before PR or `compare` runs can succeed.
 The comparison appears in the job summary, a `HPC benchmark / <suite>` check and the PR comment.
+Each measurement is marked `ok`, `warning` or `failure` by the thresholds, warnings keep the result successful and appear in the check title.
 PR measurements always compare without recording, runs from other branches fail unless `mode` is `compare`.
 Recording retries reuse the ledger stored with the history, comparison retries reuse a thirty day artifact, neither appends another measurement.
 GitHub keeps one pending report per history branch, so avoid callers that record to the same branch at the same time.

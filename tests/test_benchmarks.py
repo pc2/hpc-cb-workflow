@@ -323,8 +323,54 @@ class BenchmarkTests(unittest.TestCase):
                  patch.object(benchmark, 'report') as report:
                 benchmark.finish()
                 command.assert_not_called()
-                report.assert_called_once_with(state['context'], state['suite'], 'failure', 'Recorded regression.')
+                report.assert_called_once_with(state['context'], state['suite'], 'failure', 'Recorded regression.', 0)
                 self.assertIn('verdict=failure', (root / 'output').read_text())
+
+    def test_report_marks_measurements_between_the_warning_and_failure_thresholds(self):
+        values = {'smaller': ('customSmallerIsBetter', [(100, 90, 'ok'), (100, 130, 'warning'), (100, 200, 'failure')]),
+                  'bigger': ('customBiggerIsBetter', [(100, 120, 'ok'), (100, 80, 'warning'), (100, 50, 'failure')])}
+        for direction, (tool, cases) in values.items():
+            with self.subTest(direction=direction), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                baseline = dict(commit=dict(id='a' * 40), tool=tool,
+                                benches=[dict(name=f'm{i}', unit='s', value=old) for i, (old, _, _) in enumerate(cases)])
+                current = dict(commit=dict(id='b' * 40), tool=tool,
+                               benches=[dict(name=f'm{i}', unit='s', value=new) for i, (_, new, _) in enumerate(cases)])
+                (root / 'data.js').write_text('window.BENCHMARK_DATA = ' + json.dumps(dict(entries={'CPU': [baseline, current]})))
+                state = dict(context=dict(sha='b' * 40), suite=dict(name='CPU'), record=False, directory=str(root),
+                             previous=None, entries=1, baseline_data=baseline, baseline='a' * 40, key='1/2/CPU')
+                (root / 'benchmark-state.json').write_text(json.dumps(state))
+                env = dict(RUNNER_TEMP=str(root), OUTCOME='failure', GITHUB_OUTPUT=str(root / 'output'),
+                           GITHUB_STEP_SUMMARY=str(root / 'summary'))
+                with patch.dict(os.environ, env), patch.object(benchmark, 'report') as report:
+                    benchmark.finish()
+                _, _, verdict, summary, warnings = report.call_args.args
+                self.assertEqual(warnings, 1)
+                for index, (_, _, status) in enumerate(cases):
+                    self.assertRegex(summary, rf'\| m{index} \|.*\| {status} \|')
+                self.assertIn('benchmark result failure with 1 warning.', summary)
+                self.assertEqual(json.loads((root / 'receipt.json').read_text())['warnings'], 1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = dict(context=dict(sha='a' * 40), suite=dict(name='CPU'), record=True, key='1/2/CPU',
+                         previous=dict(verdict='success', summary='Recorded.', warnings=2))
+            (root / 'benchmark-state.json').write_text(json.dumps(state))
+            env = dict(RUNNER_TEMP=str(root), OUTCOME='skipped', GITHUB_OUTPUT=str(root / 'output'),
+                       GITHUB_STEP_SUMMARY=str(root / 'summary'))
+            with patch.dict(os.environ, env), patch.object(benchmark, 'report') as report:
+                benchmark.finish()
+            self.assertEqual(report.call_args.args[4], 2)
+
+    def test_check_title_names_the_warnings(self):
+        calls = []
+        with patch.dict(os.environ, dict(GITHUB_REPOSITORY='pc2/test')), \
+             patch.object(benchmark, 'command', return_value='[{"check_runs": []}]'), \
+             patch.object(benchmark, 'api', side_effect=lambda path, body=None, method=None: calls.append(body)):
+            context = dict(project_id=1, pipeline_id=2, sha='a' * 40, pull_request='')
+            benchmark.report(context, dict(name='CPU'), 'success', 'Summary.', 2)
+            benchmark.report(context, dict(name='CPU'), 'success', 'Summary.')
+        self.assertEqual([call['output']['title'] for call in calls],
+                         ['Benchmark success with 2 warnings', 'Benchmark success'])
 
     def test_fresh_measurement_requires_the_action_to_attribute_the_correct_commit(self):
         with tempfile.TemporaryDirectory() as directory:

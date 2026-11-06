@@ -162,6 +162,7 @@ def finish():
         raise ValueError('Benchmark action did not complete.')
     if state['previous']:
         summary = state['previous']['summary']
+        warnings = state['previous'].get('warnings', 0)
     else:
         generated = (Path(state['directory']) / 'data.js').read_text()
         data = json.loads(generated.removeprefix('window.BENCHMARK_DATA = ').strip().rstrip(';'))
@@ -176,35 +177,45 @@ def finish():
             raise ValueError('The generated measurements do not match the baseline.')
         def cell(value):
             return str(value).replace('|', '\\|').replace('\n', ' ')
-        summary = f'Benchmark suite {suite["name"]}.\n\n| Measurement | Current | Baseline | Unit | Ratio |\n| --- | --- | --- | --- | --- |\n'
+        # The status applies the action's alert rule, which reports warnings only as annotations.
+        warning_ratio = float(suite.get('alert_threshold', '115%')[:-1]) / 100
+        failure_ratio = float(suite.get('fail_threshold', '150%')[:-1]) / 100
+        warnings = 0
+        summary = (f'Benchmark suite {suite["name"]}.\n\n| Measurement | Current | Baseline | Unit | Ratio | Status |\n'
+                   '| --- | --- | --- | --- | --- | --- |\n')
         for item in current['benches']:
             baseline = previous.get(item['name'], {}).get('value', 'unavailable')
-            ratio = 'unavailable'
+            ratio, status = 'unavailable', 'no baseline'
             if type(baseline) in (int, float):
                 numerator, denominator = item['value'], baseline
                 if current['tool'] == 'customBiggerIsBetter':
                     numerator, denominator = denominator, numerator
-                ratio = f'{numerator / denominator:.3f}' if denominator else ('1.000' if numerator == 0 else 'infinite')
-            summary += f'| {cell(item["name"])} | {item["value"]} | {baseline} | {cell(item["unit"])} | {ratio} |\n'
+                value = numerator / denominator if denominator else (1.0 if numerator == 0 else math.inf)
+                ratio = 'infinite' if math.isinf(value) else f'{value:.3f}'
+                status = 'failure' if value > failure_ratio else 'warning' if value > warning_ratio else 'ok'
+                warnings += status == 'warning'
+            summary += f'| {cell(item["name"])} | {item["value"]} | {baseline} | {cell(item["unit"])} | {ratio} | {status} |\n'
         summary += f'\nBaseline commit {state["baseline"] or "none, initial measurement"}.\n'
-        summary += f'\nMeasured commit {context["sha"]}, benchmark result {verdict}.\n'
+        noted = f' with {warnings} warning{"s" if warnings != 1 else ""}' if warnings else ''
+        summary += f'\nMeasured commit {context["sha"]}, benchmark result {verdict}{noted}.\n'
         summary += f'\nWarning threshold {suite.get("alert_threshold", "115%")}, failure threshold {suite.get("fail_threshold", "150%")}.\n'
     if state['record'] and not state['previous']:
-        state['ledger'][state['key']] = dict(verdict=verdict, summary=summary)
+        state['ledger'][state['key']] = dict(verdict=verdict, summary=summary, warnings=warnings)
         ledger = Path(state['directory']) / '.hpc-runs.json'
         ledger.parent.mkdir(parents=True, exist_ok=True)
         ledger.write_text(json.dumps(state['ledger'], indent=2) + '\n')
         command('git', 'add', str(ledger))
         command('git', 'commit', '-m', f'Record pipeline {context["pipeline_id"]}.')
         command('git', 'push', 'origin', f'HEAD:refs/heads/{state["branch"]}')
-    report(context, suite, verdict, summary)
+    report(context, suite, verdict, summary, warnings)
     receipt = Path(os.environ['RUNNER_TEMP']) / 'receipt.json'
-    receipt.write_text(json.dumps(dict(key=state['key'], sha=context['sha'], verdict=verdict, summary=summary)))
+    receipt.write_text(json.dumps(dict(key=state['key'], sha=context['sha'], verdict=verdict, summary=summary,
+                                       warnings=warnings)))
     output(verdict=verdict, recorded=str(state['record']).lower())
     Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(summary)
 
 
-def report(context, suite, verdict, summary):
+def report(context, suite, verdict, summary, warnings=0):
     repo = os.environ['GITHUB_REPOSITORY']
     marker = f'<!-- hpc-benchmark:{context["project_id"]}:{context["pipeline_id"]}:{suite["name"]} -->'
     if context['pull_request']:
@@ -225,7 +236,9 @@ def report(context, suite, verdict, summary):
     existing = next((c for c in checks if c.get('external_id') == identity and
                      c['app']['slug'] == 'github-actions'), None)
     check = dict(name=check_name, status='completed', conclusion=verdict,
-                 external_id=identity, output=dict(title=f'Benchmark {verdict}', summary=summary[-50000:]))
+                 external_id=identity, output=dict(title=f'Benchmark {verdict}' + (
+                     f' with {warnings} warning{"s" if warnings != 1 else ""}' if warnings else ''),
+                     summary=summary[-50000:]))
     if existing:
         api(f'repos/{repo}/check-runs/{existing["id"]}', check, 'PATCH')
     else:
