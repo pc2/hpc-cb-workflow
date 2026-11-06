@@ -47,5 +47,10 @@
     "verdict": "success",
     "summary": "Benchmark suite Linear solve.\n\n| Measurement | Current | Baseline | Unit | Ratio | Status |\n| --- | --- | --- | --- | --- | --- |\n| linear_solve_512 | 0.001852586 | 0.002242457 | seconds | 0.826 | ok |\n\nBaseline commit 4def4507b34918a44355041328d3310e5a610240.\n\nMeasured commit 070f47b90ebf453fc1054e00c15fbafeefd39045, benchmark result success.\n\nWarning threshold 200%, failure threshold 1000%.\n",
     "warnings": 0
+  },
+  "10422/160063/Linear solve": {
+    "verdict": "success",
+    "summary": "Benchmark suite Linear solve.\n\n| Measurement | Current | Baseline | Unit | Ratio | Status |\n| --- | --- | --- | --- | --- | --- |\n| linear_solve_512 | 0.001912856 | 0.001852586 | seconds | 1.033 | ok |\n\nBaseline commit 070f47b90ebf453fc1054e00c15fbafeefd39045.\n\nMeasured commit 6fd64e50ceca2e0264d28af0ae4b28606266d44f, benchmark result success.\n\nWarning threshold 200%, failure threshold 1000%.\n",
+    "warnings": 0
   }
 }
