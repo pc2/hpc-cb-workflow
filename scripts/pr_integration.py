@@ -82,6 +82,16 @@ def verify_report(repo, pr, sha, expected):
     return reports[0]['id']
 
 
+def run_title(repo, run_id):
+    """Returns the run name, GitHub shows the bare workflow name until it has evaluated run-name."""
+    for _ in range(24):
+        title = api(f'repos/{repo}/actions/runs/{run_id}')['display_title']
+        if title != 'PR benchmark':
+            return title
+        time.sleep(5)
+    return title
+
+
 def command(repo, pr, body):
     """Posts an HPC command as the test account and returns the reply without its marker."""
     comment = api(f'repos/{repo}/issues/{pr}/comments', dict(body=body), token=os.environ['CB_TEST_TOKEN'])
@@ -137,7 +147,7 @@ def run(state_path):
         if not match:
             raise AssertionError(f'The comment did not dispatch the HPC workflow: {reply}')
         origin = int(match[1])
-        title = api(f'repos/{repo}/actions/runs/{origin}')['display_title']
+        title = run_title(repo, origin)
         if title != f'PR benchmark {pr} {commit} {"option-check" if options else "none"}':
             raise AssertionError(f'The command options did not reach the run: {title}')
         result = wait_run(repo, origin, expected)

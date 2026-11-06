@@ -241,6 +241,13 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertEqual(replies, [])
                 self.assertRegex(str(error), 'needs repository write access')
 
+    def test_run_title_waits_until_github_evaluates_the_run_name(self):
+        titles = iter(['PR benchmark', 'PR benchmark', 'PR benchmark 7 abc none'])
+        with patch.object(pr_integration, 'api', side_effect=lambda path: dict(display_title=next(titles))), \
+             patch.object(pr_integration.time, 'sleep') as sleep:
+            self.assertEqual(pr_integration.run_title('pc2/test', 5), 'PR benchmark 7 abc none')
+        self.assertEqual(sleep.call_count, 2)
+
     def test_waiting_tolerates_a_job_list_that_lags_behind_the_completed_run(self):
         run = dict(id=5, status='completed', conclusion='failure', run_attempt=2, html_url='run')
         report = 'hpc / benchmark (fixture) / report'
