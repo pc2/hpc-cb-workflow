@@ -58,7 +58,7 @@ for stub_path, target, workflow_file in [('.github/workflows/pr-command.yml', '.
     assert stub['jobs']['hpc']['if'] == "github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')"
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
-    assert forwarded['command_comment'] == '${{ inputs.command_comment }}', example
+    assert not {'context_run_id', 'pull_request', 'source_sha', 'command_comment'} & set(forwarded), example
 assert caller['jobs']['hpc']['if'] == "vars.GITLAB_PROJECT_ID != ''"
 assert caller['jobs']['hpc']['uses'].endswith('@REVIEWED_COMMIT')
 assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['required'] == 'false'
@@ -82,7 +82,7 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert hpc['uses'] == './.github/workflows/hpc-pipeline.yml'
     assert hpc['if'] == "vars.GITLAB_PROJECT_ID != ''"
     assert set(hpc['with']) <= set(workflow['on']['workflow_call']['inputs'])
-    assert hpc['with']['context_run_id'] == '${{ inputs.context_run_id }}'
+    assert 'context_run_id' not in hpc['with'] and 'pull_request' not in hpc['with']
     assert 'EXPECTED_COMMIT_SHA' not in hpc['with']['pipeline_variables']
     assert hpc['secrets'] == {'GITLAB_TOKEN': '${{ secrets.GITLAB_TOKEN }}',
                               'GITLAB_TRIGGER_TOKEN': '${{ secrets.GITLAB_TRIGGER_TOKEN }}'}
@@ -107,8 +107,8 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert json.loads(history['jobs']['benchmark']['with']['benchmark'])['mode'] == 'pages'
     assert 'results/' in gitlab_ci['quick']['artifacts']['paths']
 assert jobs['wait']['timeout-minutes'] == '345'
-assert "inputs.context_run_id == ''" in jobs['start']['if']
-assert "inputs.context_run_id != ''" in jobs['wait']['if']
+assert "(inputs.context_run_id || github.event.inputs.context_run_id) == ''" in jobs['start']['if']
+assert "(inputs.context_run_id || github.event.inputs.context_run_id) != ''" in jobs['wait']['if']
 assert "github.event_name == 'workflow_dispatch'" in jobs['start']['if']
 assert "github.event_name == 'schedule'" in jobs['start']['if']
 assert jobs['wait']['needs'] == 'start'
@@ -119,7 +119,7 @@ def job_runs(name, event, attempt, context='', start_result='skipped', canceled=
     expression = jobs[name]['if'].replace("format('refs/heads/{0}', github.event.repository.default_branch)",
                                           repr(f'refs/heads/{default}'))
     for key, value in {'github.event_name': event, 'github.run_attempt': attempt, 'github.ref': ref,
-                       'inputs.context_run_id': context, 'needs.start.result': start_result,
+                       '(inputs.context_run_id || github.event.inputs.context_run_id)': context, 'needs.start.result': start_result,
                        'cancelled()': canceled}.items():
         expression = expression.replace(key, repr(value))
     expression = expression.replace('&&', ' and ').replace('||', ' or ')
@@ -209,11 +209,11 @@ assert by_name['Follow GitLab jobs']['env']['STOP_ON_MANUAL'] == 'true'
 checkout = by_name['Check out the selected commit']
 mirror = by_name['Push the selected commit to GitLab']
 assert checkout in jobs['start']['steps'] and mirror in jobs['start']['steps']
-assert checkout['with'] == {'ref': '${{ inputs.source_sha || github.sha }}', 'fetch-depth': '0',
+assert checkout['with'] == {'ref': '${{ env.HPC_SOURCE_SHA || github.sha }}', 'fetch-depth': '0',
                             'persist-credentials': 'false'}
 assert mirror['env'] == {'MODE': 'mirror', 'GITLAB_TOKEN': '${{ secrets.GITLAB_TOKEN }}',
-                         'MIRROR_SHA': '${{ inputs.source_sha || github.sha }}',
-                         'MIRROR_BRANCH': "${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}",
+                         'MIRROR_SHA': '${{ env.HPC_SOURCE_SHA || github.sha }}',
+                         'MIRROR_BRANCH': "${{ env.HPC_SOURCE_SHA && format('hpc-pr-{0}-{1}', env.HPC_PULL_REQUEST, env.HPC_SOURCE_SHA) || github.ref_name }}",
                          'MIRROR_ONLY': 'true', 'FORCE_PUSH': 'true'}
 assert steps.index(checkout) < steps.index(mirror) < steps.index(by_name['Start GitLab pipeline'])
 assert 'MIRROR_WAIT_MINUTES' not in by_name['Start GitLab pipeline']['env']
@@ -429,6 +429,22 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
                             check=False)
     assert result.returncode != 0
     assert not marker.exists()
+
+    def test_callers_may_omit_dispatch_inputs_but_not_change_them():
+        check = by_name['Check caller inputs']['run']
+        sha = 'a' * 40
+        cases = [({}, {'pull_request': '7', 'source_sha': sha}, True), ({'pull_request': '7'}, {'pull_request': '7'}, True),
+                 ({'pull_request': '7'}, None, True), ({'pull_request': '7'}, {'pull_request': ''}, True),
+                 ({'pull_request': '8'}, {'pull_request': '7'}, False), ({'source_sha': sha}, {'source_sha': 'b' * 40}, False),
+                 ({'command_comment': '1'}, {'command_comment': '2'}, False)]
+        for passed, dispatched, accepted in cases:
+            result = run(check, {'PASSED': json.dumps(passed | {'benchmark': '{}'}), 'DISPATCHED': json.dumps(dispatched)})
+            assert (result.returncode == 0) == accepted, (passed, dispatched, result.stdout)
+        assert workflow['env']['HPC_PULL_REQUEST'] == '${{ inputs.pull_request || github.event.inputs.pull_request }}'
+        assert workflow['env']['HPC_CONTEXT_RUN_ID'] == '${{ inputs.context_run_id || github.event.inputs.context_run_id }}'
+        assert jobs['start']['steps'][0]['name'] == 'Check caller inputs'
+
+    test_callers_may_omit_dispatch_inputs_but_not_change_them()
 
     def test_only_repository_writers_authorize_prs_and_other_branches():
         authorize = by_name['Authorize the run']['run']

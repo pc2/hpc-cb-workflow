@@ -40,10 +40,6 @@ jobs:
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
-      pull_request: ${{ inputs.pull_request }}
-      source_sha: ${{ inputs.source_sha }}
-      command_comment: ${{ inputs.command_comment }}
-      context_run_id: ${{ inputs.context_run_id }}
       max_wait_minutes: ${{ inputs.source_sha != '' && inputs.context_run_id == '' && '1' || '330' }}
       pipeline_variables: |
         SCENARIO=regression

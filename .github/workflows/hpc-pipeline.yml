@@ -62,9 +62,14 @@ permissions:
   pages: write
   id-token: write
 
+# A called workflow sees the caller's workflow_dispatch event, so callers need not pass these inputs through.
 env:
   GITLAB_HOSTNAME: ${{ inputs.gitlab_hostname }}
   GITLAB_PROJECT_ID: ${{ inputs.gitlab_project_id }}
+  HPC_CONTEXT_RUN_ID: ${{ inputs.context_run_id || github.event.inputs.context_run_id }}
+  HPC_PULL_REQUEST: ${{ inputs.pull_request || github.event.inputs.pull_request }}
+  HPC_SOURCE_SHA: ${{ inputs.source_sha || github.event.inputs.source_sha }}
+  HPC_COMMAND_COMMENT: ${{ inputs.command_comment || github.event.inputs.command_comment }}
 
 jobs:
   start:
@@ -72,7 +77,7 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
       (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) &&
-      inputs.context_run_id == '' && github.run_attempt == 1
+      (inputs.context_run_id || github.event.inputs.context_run_id) == '' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -80,6 +85,21 @@ jobs:
       actions: read
       pull-requests: read
     steps:
+      - name: Check caller inputs
+        shell: bash
+        env:
+          PASSED: ${{ toJSON(inputs) }}
+          DISPATCHED: ${{ toJSON(github.event.inputs) }}
+        run: |
+          set -euo pipefail
+          for name in pull_request source_sha command_comment; do
+            passed=$(jq -r --arg name "$name" '.[$name] // ""' <<< "$PASSED")
+            dispatched=$(jq -r --arg name "$name" '(. // {})[$name] // ""' <<< "$DISPATCHED")
+            if [[ -n $passed && -n $dispatched && $passed != "$dispatched" ]]; then
+              echo "::error::The caller passes $name $passed but was dispatched with $dispatched, pass the input unchanged or omit it."
+              exit 1
+            fi
+          done
       # Reviewed code on the default branch runs for every trigger, other commits need an authorized person.
       - name: Authorize the run
         shell: bash
@@ -87,9 +107,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           ACTOR: ${{ github.triggering_actor }}
-          PR: ${{ inputs.pull_request }}
-          COMMENT: ${{ inputs.command_comment }}
-          SELECTED_SHA: ${{ inputs.source_sha || github.sha }}
+          PR: ${{ env.HPC_PULL_REQUEST }}
+          COMMENT: ${{ env.HPC_COMMAND_COMMENT }}
+          SELECTED_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
         run: |
           set -euo pipefail
           allowed() {
@@ -139,8 +159,8 @@ jobs:
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
-          PR: ${{ inputs.pull_request }}
-          SELECTED_SHA: ${{ inputs.source_sha }}
+          PR: ${{ env.HPC_PULL_REQUEST }}
+          SELECTED_SHA: ${{ env.HPC_SOURCE_SHA }}
           BENCHMARK: ${{ inputs.benchmark }}
           EXPECTED_PIPELINE_STATUS: ${{ inputs.expected_pipeline_status }}
         run: |
@@ -159,7 +179,7 @@ jobs:
         shell: bash
         env:
           PIPELINE_VARIABLES: ${{ inputs.pipeline_variables }}
-          SELECTED_SHA: ${{ inputs.source_sha || github.sha }}
+          SELECTED_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
         run: |
           set -euo pipefail
           fail() {
@@ -191,12 +211,12 @@ jobs:
             echo "$delimiter"
           } >> "$GITHUB_OUTPUT"
       - name: Verify PR commit
-        if: inputs.pull_request != ''
+        if: env.HPC_PULL_REQUEST != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ inputs.pull_request }}
-          SELECTED_SHA: ${{ inputs.source_sha || github.sha }}
+          PR: ${{ env.HPC_PULL_REQUEST }}
+          SELECTED_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
         run: |
           set -euo pipefail
           [[ $SELECTED_SHA =~ ^[0-9a-f]{40}$ ]]
@@ -208,7 +228,7 @@ jobs:
       - name: Check out the selected commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Use version 7.0.1.
         with:
-          ref: ${{ inputs.source_sha || github.sha }}
+          ref: ${{ env.HPC_SOURCE_SHA || github.sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Push the selected commit to GitLab
@@ -216,8 +236,8 @@ jobs:
         env:
           MODE: mirror
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          MIRROR_SHA: ${{ inputs.source_sha || github.sha }}
-          MIRROR_BRANCH: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
+          MIRROR_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
+          MIRROR_BRANCH: ${{ env.HPC_SOURCE_SHA && format('hpc-pr-{0}-{1}', env.HPC_PULL_REQUEST, env.HPC_SOURCE_SHA) || github.ref_name }}
           MIRROR_ONLY: 'true'
           FORCE_PUSH: 'true'
       - name: Start GitLab pipeline
@@ -226,7 +246,7 @@ jobs:
         env:
           MODE: trigger
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
-          PIPELINE_REF: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
+          PIPELINE_REF: ${{ env.HPC_SOURCE_SHA && format('hpc-pr-{0}-{1}', env.HPC_PULL_REQUEST, env.HPC_SOURCE_SHA) || github.ref_name }}
           PIPELINE_VARIABLES: ${{ steps.variables.outputs.lines }}
       - name: Save pipeline context
         shell: bash
@@ -234,9 +254,9 @@ jobs:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           PIPELINE_ID: ${{ steps.trigger.outputs.pipeline_id }}
-          PR: ${{ inputs.pull_request }}
-          SOURCE_SHA: ${{ inputs.source_sha || github.sha }}
-          SOURCE_REF: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
+          PR: ${{ env.HPC_PULL_REQUEST }}
+          SOURCE_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
+          SOURCE_REF: ${{ env.HPC_SOURCE_SHA && format('hpc-pr-{0}-{1}', env.HPC_PULL_REQUEST, env.HPC_SOURCE_SHA) || github.ref_name }}
           BENCHMARK: ${{ inputs.benchmark }}
           EXPECTED_PIPELINE_STATUS: ${{ inputs.expected_pipeline_status }}
         run: |
@@ -283,17 +303,17 @@ jobs:
       !cancelled() &&
       (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
       (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) &&
-      (needs.start.result == 'success' || inputs.context_run_id != '' || github.run_attempt > 1)
+      (needs.start.result == 'success' || (inputs.context_run_id || github.event.inputs.context_run_id) != '' || github.run_attempt > 1)
     runs-on: ubuntu-latest
     timeout-minutes: 345
     permissions:
       actions: write
       checks: write
     concurrency:
-      group: hpc-monitor-${{ github.repository }}-${{ inputs.gitlab_project_id }}-${{ inputs.context_run_id || github.run_id }}
+      group: hpc-monitor-${{ github.repository }}-${{ inputs.gitlab_project_id }}-${{ (inputs.context_run_id || github.event.inputs.context_run_id) || github.run_id }}
       cancel-in-progress: false
     env:
-      CONTEXT_RUN_ID: ${{ inputs.context_run_id || github.run_id }}
+      CONTEXT_RUN_ID: ${{ (inputs.context_run_id || github.event.inputs.context_run_id) || github.run_id }}
     outputs:
       pipeline_id: ${{ steps.identity.outputs.pipeline_id }}
       sha: ${{ steps.identity.outputs.sha }}
@@ -557,7 +577,7 @@ jobs:
         suite: ${{ fromJSON(needs.wait.outputs.suites) }}
     uses: ./.github/workflows/benchmark.yml
     with:
-      context_run_id: ${{ inputs.context_run_id || github.run_id }}
+      context_run_id: ${{ (inputs.context_run_id || github.event.inputs.context_run_id) || github.run_id }}
       artifact: gitlab-${{ inputs.gitlab_project_id }}-${{ needs.wait.outputs.pipeline_id }}
       config: ${{ needs.wait.outputs.benchmark }}
       suite: ${{ toJSON(matrix.suite) }}

@@ -44,8 +44,6 @@ jobs:
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
-      context_run_id: ${{ inputs.context_run_id }}
-      pull_request: ${{ inputs.pull_request }}
       max_wait_minutes: ${{ startsWith(inputs.scenario, 'handover') && inputs.context_run_id == '' && '1' || '330' }}
       expected_pipeline_status: ${{ (inputs.scenario == 'failure' || inputs.scenario == 'handover_failure') && 'failed' || 'success' }}
       pipeline_variables: |

@@ -35,10 +35,6 @@ jobs:
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
-      context_run_id: ${{ inputs.context_run_id }}
-      pull_request: ${{ inputs.pull_request }}
-      source_sha: ${{ inputs.source_sha }}
-      command_comment: ${{ inputs.command_comment }}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}

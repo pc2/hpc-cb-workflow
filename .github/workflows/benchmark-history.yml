@@ -27,7 +27,6 @@ jobs:
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
-      context_run_id: ${{ inputs.context_run_id }}
       pipeline_variables: |
         SCENARIO=benchmark
       benchmark: >-

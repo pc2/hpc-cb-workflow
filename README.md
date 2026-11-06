@@ -41,6 +41,7 @@ GitLab operations use `pc2/github2lab_action`, all action references are pinned 
 The [manual example](examples/manual.yml) and [benchmark example](examples/benchmark.yml) are complete callers.
 Replace `REVIEWED_COMMIT` with the published workflow commit.
 The four dispatch inputs are required, continuation dispatches the caller with `context_run_id` and the PR command dispatches it with `pull_request`, `source_sha` and `command_comment`.
+The workflow reads them from the dispatch, so the caller only declares them.
 GitLab reads `.gitlab-ci.yml` from the mirrored commit, so it lives in the caller repository.
 
 ```yaml
@@ -76,10 +77,6 @@ jobs:
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
-      context_run_id: ${{ inputs.context_run_id }}
-      pull_request: ${{ inputs.pull_request }}
-      source_sha: ${{ inputs.source_sha }}
-      command_comment: ${{ inputs.command_comment }}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
