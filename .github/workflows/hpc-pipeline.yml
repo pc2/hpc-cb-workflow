@@ -127,7 +127,7 @@ jobs:
           read -ra words <<< "$(jq -r '.body | gsub("\\s+"; " ")' <<< "$comment")"
           [[ ${words[0]:-} == /hpc ]]
           for word in "${words[@]:1}"; do
-            if [[ $word =~ ^[0-9a-f]{7,40}$ && $SELECTED_SHA == "$word"* ]]; then
+            if [[ $word =~ ^[0-9a-f]{40}$ && $SELECTED_SHA == "$word" ]]; then
               echo "Authorized by $author in comment $COMMENT."
               exit 0
             fi

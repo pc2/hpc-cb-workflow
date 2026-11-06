@@ -184,12 +184,13 @@ For an existing documentation site, use `history` and copy the directory from th
 ## PR command
 
 Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment `/hpc <commit> [<commit> ...]`.
-Each commit is named by at least seven hex characters and must belong to the PR.
+Each commit requires its full 40 character hexadecimal hash and must belong to the PR.
+The full hash binds approval to the reviewed commit even if the PR changes before dispatch.
 It verifies the commenter's repository write access and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default, once per commit.
 The start job checks the comment author for repository write access again.
 Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.
-If any named commit is unknown or ambiguous, nothing is dispatched.
+If any hash is incomplete or names a commit outside the PR, nothing is dispatched.
 The reply names the authorized commits or the reasons for refusing.
 Results appear as check runs on each commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
 GitHub shows checks of earlier commits on the commit pages, not in the PR view.

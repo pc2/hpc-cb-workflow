@@ -61,17 +61,16 @@ def select_commits(body, commits, head):
     options, reasons = parse_options([word for word in words if '=' in word])
     names = [word for word in words if '=' not in word]
     if not names:
-        return [], {}, ['Name the reviewed commits, for example `/hpc ' + head[:12] + '`.'] + reasons
+        return [], {}, ['Name the reviewed commits, for example `/hpc ' + head + '`.'] + reasons
     selected = []
     for name in names:
-        if not re.fullmatch(r'[0-9a-f]{7,40}', name):
-            reasons.append('Commits are named by at least seven hex characters of their hash.')
+        if not re.fullmatch(r'[0-9a-f]{40}', name):
+            reasons.append('Commits require their full 40 character hexadecimal hash.')
             continue
-        matches = [sha for sha in commits if sha.startswith(name)]
-        if len(matches) != 1:
-            reasons.append(f'{name} matches {"no commit" if not matches else "several commits"} of this PR.')
-        elif matches[0] not in selected:
-            selected.append(matches[0])
+        if name not in commits:
+            reasons.append(f'{name} matches no commit of this PR.')
+        elif name not in selected:
+            selected.append(name)
     return (selected, options, []) if not reasons else ([], {}, reasons)
 
 

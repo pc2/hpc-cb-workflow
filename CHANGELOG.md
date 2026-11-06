@@ -14,6 +14,7 @@ Publication retries reuse the saved measurement without creating another point.
 Pages are redeployed after a failing suite, since its point is already recorded.
 A failed benchmark action can no longer report an earlier measurement of the same commit.
 The `/hpc <commit> [<commit> ...]` command dispatches the named reviewed commits of the PR, earlier commits included.
+Approval requires full 40 character commit hashes in the command and start job.
 Command options `name=value` set the caller's dispatch inputs, the PR command test verifies a refused and an accepted option.
 The command and start job require repository write access for the person authorizing PR runs and runs of other branches.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.

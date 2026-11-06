@@ -434,17 +434,17 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         accepted = [{'EVENT': 'push', 'ACTOR': 'anyone'}, {'EVENT': 'schedule', 'ACTOR': 'anyone'},
                     {'PR': '', 'ACTOR': 'github-actions[bot]'}, {'ACTOR': 'maintainer'}, {'ACTOR': 'owner'},
                     {'ACTOR': 'writer'}, {'PR': '', 'ACTOR': 'writer', 'GITHUB_REF': 'refs/heads/feature'},
-                    comment(f'/hpc {sha[:7]}', author='writer'),
-                    comment(f'/hpc {sha[:7]}'), comment(f'/hpc {"b" * 7} {sha} checks=gpu'),
-                    comment(f'/hpc\n{sha[:12]}\n', author='owner')]
+                    comment(f'/hpc {sha}', author='writer'),
+                    comment(f'/hpc {sha}'), comment(f'/hpc {"b" * 40} {sha} checks=gpu'),
+                    comment(f'/hpc\n{sha}\n', author='owner')]
         refused = [{'ACTOR': 'stranger'}, {'ACTOR': 'github-actions[bot]'},
-                   comment(f'/hpc {"b" * 7}'),
-                   comment(f'/hpc {sha[:7]}', issue=8), comment(f'please /hpc {sha[:7]}'),
-                   comment(f'/hpc {sha[:6]}'), comment(f'/hpc checks={sha[:7]}')]
+                   comment(f'/hpc {"b" * 40}'),
+                   comment(f'/hpc {sha}', issue=8), comment(f'please /hpc {sha}'),
+                   comment(f'/hpc {sha[:6]}'), comment(f'/hpc checks={sha}')]
         for actor in ('reader', 'triager', 'outsider', 'missing', 'stranger'):
             refused += [{'ACTOR': actor},
                         {'PR': '', 'ACTOR': actor, 'GITHUB_REF': 'refs/heads/feature'},
-                        comment(f'/hpc {sha[:7]}', author=actor)]
+                        comment(f'/hpc {sha}', author=actor)]
         for overrides in accepted:
             result = run(authorize, base | overrides)
             assert result.returncode == 0, (overrides, result.stdout, result.stderr)
@@ -455,6 +455,23 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         assert not gh_log.read_text()
 
     test_only_repository_writers_authorize_prs_and_other_branches()
+
+    def test_command_authorization_requires_the_full_selected_commit_hash():
+        reviewed = 'b12dfc7bc9e9ee2b5c37be4e2b40f58b0c8e7630'
+        replacement = 'b12dfc7ea13956dab968787fcf9db88b3f524adc'
+        base = {'EVENT': 'workflow_dispatch', 'ACTOR': 'github-actions[bot]', 'PR': '7', 'COMMENT': '99',
+                'GITHUB_API_URL': 'https://api.github.com', 'MOCK_PERMISSIONS': '{"writer": "write"}'}
+        cases = [(reviewed, reviewed, True), (replacement, reviewed, False),
+                 (replacement, replacement + 'a', False)]
+        cases += [(replacement, replacement[:length], False) for length in (7, 12, 39)]
+        for selected, named, accepted in cases:
+            comment = {'body': f'/hpc {named}', 'user': {'login': 'writer'},
+                       'issue_url': 'https://api.github.com/repos/example/project/issues/7'}
+            result = run(by_name['Authorize the run']['run'], base | {
+                'SELECTED_SHA': selected, 'MOCK_COMMENT': json.dumps(comment)})
+            assert (result.returncode == 0) == accepted, (selected, named, result.stdout, result.stderr)
+
+    test_command_authorization_requires_the_full_selected_commit_hash()
 
     validate = by_name['Validate configuration']['run']
     assert run(validate).returncode == 0

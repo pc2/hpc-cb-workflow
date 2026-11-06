@@ -122,7 +122,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_command_options_reach_every_dispatch_as_inputs(self):
         commits = ['a' * 40, 'c' * 40]
-        dispatched, replies, error = self.command(f'/hpc suite=gpu {"a" * 7} {"c" * 7} threads=4', commits)
+        dispatched, replies, error = self.command(f'/hpc suite=gpu {"a" * 40} {"c" * 40} threads=4', commits)
         self.assertIsNone(error)
         self.assertEqual(dispatched, commits)
         self.assertTrue(all(inputs['suite'] == 'gpu' and inputs['threads'] == '4' for inputs in self.inputs))
@@ -130,12 +130,12 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(replies[0].count('with suite=gpu threads=4'), 2)
 
     def test_command_refuses_invalid_options_without_dispatching(self):
-        for body, reason in [(f'/hpc {"c" * 7} source_sha={"d" * 40}', 'set by the command itself'),
-                             (f'/hpc {"c" * 7} context_run_id=5', 'set by the command itself'),
-                             (f'/hpc {"c" * 7} command_comment=5', 'set by the command itself'),
-                             (f'/hpc {"c" * 7} suite=cpu suite=gpu', 'given twice'),
-                             (f'/hpc {"c" * 7} suite=a;b', 'name=value'), (f'/hpc {"c" * 7} 1suite=a', 'name=value'),
-                             (f'/hpc {"c" * 7} suite=', 'name=value'), ('/hpc suite=gpu', 'Name the reviewed commits')]:
+        for body, reason in [(f'/hpc {"c" * 40} source_sha={"d" * 40}', 'set by the command itself'),
+                             (f'/hpc {"c" * 40} context_run_id=5', 'set by the command itself'),
+                             (f'/hpc {"c" * 40} command_comment=5', 'set by the command itself'),
+                             (f'/hpc {"c" * 40} suite=cpu suite=gpu', 'given twice'),
+                             (f'/hpc {"c" * 40} suite=a;b', 'name=value'), (f'/hpc {"c" * 40} 1suite=a', 'name=value'),
+                             (f'/hpc {"c" * 40} suite=', 'name=value'), ('/hpc suite=gpu', 'Name the reviewed commits')]:
             with self.subTest(body=body):
                 dispatched, replies, error = self.command(body, ['c' * 40])
                 self.assertIsInstance(error, ValueError)
@@ -146,7 +146,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_command_relays_a_rejection_of_the_first_dispatch(self):
         dispatched, replies, error = self.command(
-            f'/hpc {"a" * 7} {"c" * 7} undeclared=1', ['a' * 40, 'c' * 40],
+            f'/hpc {"a" * 40} {"c" * 40} undeclared=1', ['a' * 40, 'c' * 40],
             reject=(0, 'gh: Unexpected inputs provided: ["undeclared"] (HTTP 422)\n'))
         self.assertIsInstance(error, ValueError)
         self.assertEqual(dispatched, [])
@@ -156,7 +156,7 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn('Unexpected inputs provided', replies[0])
 
     def test_command_announces_started_runs_when_a_later_dispatch_is_rejected(self):
-        dispatched, replies, error = self.command(f'/hpc {"a" * 7} {"c" * 7}', ['a' * 40, 'c' * 40],
+        dispatched, replies, error = self.command(f'/hpc {"a" * 40} {"c" * 40}', ['a' * 40, 'c' * 40],
                                                   reject=(1, 'gh: Server Error (HTTP 500)'))
         self.assertIsInstance(error, subprocess.CalledProcessError)
         self.assertEqual(dispatched, ['a' * 40])
@@ -166,8 +166,8 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_command_dispatches_each_named_commit_of_the_pr(self):
         commits = ['a' * 40, 'b' * 40, 'c' * 40]
-        for body, expected in [(f'/hpc {"c" * 7}', ['c' * 40]), (f'  /hpc {"c" * 40}\n', ['c' * 40]),
-                               (f'/hpc {"a" * 7} {"c" * 12} {"a" * 9}', ['a' * 40, 'c' * 40])]:
+        for body, expected in [(f'/hpc {"c" * 40}', ['c' * 40]), (f'  /hpc {"c" * 40}\n', ['c' * 40]),
+                               (f'/hpc {"a" * 40} {"c" * 40} {"a" * 40}', ['a' * 40, 'c' * 40])]:
             with self.subTest(body=body):
                 dispatched, replies, error = self.command(body, commits)
                 self.assertIsNone(error)
@@ -179,9 +179,8 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_command_refuses_commits_outside_the_pr_without_dispatching_any(self):
         commits = ['a' * 40, 'a' * 7 + 'b' * 33, 'd' * 40]
-        for body, reason in [(f'/hpc {"d" * 7} {"e" * 7}', 'matches no commit'),
-                             (f'/hpc {"a" * 7}', 'matches several commits'),
-                             ('/hpc', 'Name the reviewed commits'), ('/hpc please', 'seven hex characters')]:
+        for body, reason in [(f'/hpc {"d" * 40} {"e" * 40}', 'matches no commit'),
+                             ('/hpc', 'Name the reviewed commits'), ('/hpc please', 'full 40 character')]:
             with self.subTest(body=body):
                 dispatched, replies, error = self.command(body, commits)
                 self.assertIsInstance(error, ValueError)
@@ -191,6 +190,35 @@ class BenchmarkTests(unittest.TestCase):
                 self.assertIn(reason, replies[0])
                 self.assertNotIn('please', replies[0])
 
+    def test_command_rejects_incomplete_hashes_without_dispatching_any_commit(self):
+        sha = 'c' * 40
+        for name in [sha[:length] for length in range(1, 40)] + [sha + 'c', 'g' * 40]:
+            with self.subTest(name=name):
+                dispatched, replies, error = self.command(f'/hpc {sha} {name}', [sha])
+                self.assertIsInstance(error, ValueError)
+                self.assertEqual(dispatched, [])
+                self.assertEqual(self.inputs, [])
+                self.assertIn('full 40 character', replies[0])
+
+    def test_command_approval_cannot_select_a_replacement_with_the_same_prefix(self):
+        reviewed = 'b12dfc7bc9e9ee2b5c37be4e2b40f58b0c8e7630'
+        replacement = 'b12dfc7ea13956dab968787fcf9db88b3f524adc'
+        dispatched, _, error = self.command(f'/hpc {reviewed}', [reviewed, replacement])
+        self.assertIsNone(error)
+        self.assertEqual(dispatched, [reviewed])
+        for name in (reviewed, reviewed[:7]):
+            with self.subTest(name=name):
+                dispatched, _, error = self.command(f'/hpc {name}', [replacement])
+                self.assertIsInstance(error, ValueError)
+                self.assertEqual(dispatched, [])
+                self.assertEqual(self.inputs, [])
+
+    def test_command_without_commits_suggests_the_full_head_hash(self):
+        sha = 'c' * 40
+        _, replies, error = self.command('/hpc', [sha])
+        self.assertIsInstance(error, ValueError)
+        self.assertIn(f'`/hpc {sha}`', replies[0])
+
     def test_command_searches_all_pages_of_pr_commits(self):
         commits = [f'{index:040x}' for index in range(1, 231)]
         dispatched, _, error = self.command(f'/hpc {commits[0]}', commits)
@@ -199,7 +227,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_command_announces_started_runs_when_a_later_dispatch_fails(self):
         commits = ['a' * 40, 'b' * 40]
-        dispatched, replies, error = self.command(f'/hpc {"a" * 7} {"b" * 7}', commits, fail_dispatch_after=1)
+        dispatched, replies, error = self.command(f'/hpc {"a" * 40} {"b" * 40}', commits, fail_dispatch_after=1)
         self.assertIsInstance(error, RuntimeError)
         self.assertEqual(len(replies), 1)
         self.assertIn(f'Authorized commit {"a" * 40}', replies[0])
