@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1793979279817,
+  "lastUpdate": 1793982066113,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Julia linear solve": [
@@ -289,6 +289,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "linear_solve_512",
             "value": 0.001971864,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gerrit.pape@uni-paderborn.de",
+            "name": "Gerrit Pape",
+            "username": "papeg"
+          },
+          "committer": {
+            "email": "gerrit.pape@uni-paderborn.de",
+            "name": "Gerrit Pape",
+            "username": "papeg"
+          },
+          "distinct": true,
+          "id": "4def4507b34918a44355041328d3310e5a610240",
+          "message": "make the PR command a reusable workflow",
+          "timestamp": "2026-11-06T17:18:51+01:00",
+          "tree_id": "5a9628abefdd6720938eb38121bc31421e6e5e96",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/4def4507b34918a44355041328d3310e5a610240"
+        },
+        "date": 1793982066105,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "linear_solve_512",
+            "value": 0.002242457,
             "unit": "seconds"
           }
         ]
