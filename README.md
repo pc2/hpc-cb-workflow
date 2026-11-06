@@ -40,7 +40,7 @@ GitLab operations use `pc2/github2lab_action`, all action references are pinned 
 
 The [manual example](examples/manual.yml) and [benchmark example](examples/benchmark.yml) are complete callers.
 Replace `REVIEWED_COMMIT` with the published workflow commit.
-The three dispatch inputs are required, continuation dispatches the caller with `context_run_id` and the PR command dispatches it with `pull_request` and `source_sha`.
+The four dispatch inputs are required, continuation dispatches the caller with `context_run_id` and the PR command dispatches it with `pull_request`, `source_sha` and `command_comment`.
 Save the caller as `hpc-pr.yml` or name it in the `CB_COMMAND_WORKFLOW` variable.
 GitLab reads `.gitlab-ci.yml` from the mirrored commit, so it lives in the caller repository.
 
@@ -57,6 +57,9 @@ on:
         type: string
         default: ''
       source_sha:
+        type: string
+        default: ''
+      command_comment:
         type: string
         default: ''
 
@@ -77,6 +80,8 @@ jobs:
       context_run_id: ${{ inputs.context_run_id }}
       pull_request: ${{ inputs.pull_request }}
       source_sha: ${{ inputs.source_sha }}
+      command_comment: ${{ inputs.command_comment }}
+      authorized_roles: ${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}
       pipeline_variables: EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -102,6 +107,8 @@ workflow:
 | `context_run_id` | The original GitHub run, used to resume monitoring. |
 | `pull_request` | An optional open PR that contains the selected commit. |
 | `source_sha` | A reviewed commit of the PR, verified against `pull_request`. |
+| `command_comment` | The PR comment that authorized the run, set by the PR command. |
+| `authorized_roles` | Repository roles that may start PR runs and runs of other branches, `admin maintain` by default. |
 | `benchmark` | Benchmark publication configuration as JSON, see below. |
 | `expected_pipeline_status` | The required terminal status, `success` by default, `failed` for deliberate failure tests. |
 | `max_wait_minutes` | Minutes one run monitors before continuing in another run, at most 330. |
@@ -126,7 +133,12 @@ A pipeline without artifacts passes, the summary reports the number of collected
 `expire_in` must outlast the queue time of the following jobs, since collection starts after the whole pipeline.
 
 Only pushes to the default branch, manual dispatch and schedules run the workflow, so maintainers authorize every commit before it reaches the cluster.
+The start job checks who started the run before anything is mirrored.
+Pushes, schedules and dispatches of the default branch without a PR run reviewed code and need no further check.
+Other dispatches need a person with one of the `authorized_roles`, GitHub alone lets every user with write access dispatch.
+A dispatch of the PR command passes its comment, its author must hold such a role and the comment must name the selected commit.
 Pass `source_sha` and `pull_request` to run a reviewed commit of an open PR, including a fork commit, from the caller on the default branch.
+Users with write access can also run their own workflows on other branches, which receive the repository secrets, so grant write access only to trusted people.
 PR runs use the GitLab branch `hpc-pr-<number>-<sha>`, these branches remain on GitLab until pruned.
 Jobs run with the CI account's filesystem and scheduler permissions, there is no sandbox.
 GitLab tokens reach only the steps that use them, collected archives are stored without extraction.
@@ -175,6 +187,7 @@ For an existing documentation site, use `history` and copy the directory from th
 Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment `/hpc <commit> [<commit> ...]`.
 Each commit is named by at least seven hex characters and must belong to the PR.
 It verifies the commenter's role, `admin maintain` by default in `CB_COMMAND_ROLES`, and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default, once per commit.
+The start job repeats the role check with the comment, so a copied or changed command cannot widen it.
 Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.
 If any named commit is unknown or ambiguous, nothing is dispatched.
@@ -186,7 +199,7 @@ The same run can be dispatched by hand with `pull_request` and `source_sha`.
 Options after the commits select what runs, `/hpc <commit> suite=gpu` applies to all named commits.
 Each option is a `workflow_dispatch` input of the caller with the same name, so the comment and the Actions form use the same names.
 Options grant nothing beyond a manual dispatch, which the authorized roles can start anyway.
-The command refuses `pull_request`, `source_sha` and `context_run_id`, values allow letters, digits and `._:/+-`.
+The command refuses `pull_request`, `source_sha`, `context_run_id` and `command_comment`, values allow letters, digits and `._:/+-`.
 GitHub rejects inputs the caller does not declare, and the reply relays the rejection.
 Declare options as `type: choice` to restrict their values, and forward them explicitly as pipeline variables.
 
@@ -244,4 +257,5 @@ It needs the following settings in this repository.
 | `CB_TEST_ACTOR` | Actions variable. | The GitHub username owning the token. |
 
 PRs created with the workflow token would need manual approval before their checks run, PRs created with the supplied token do not.
-The test actor is authorized only for generated PRs changing `benchmarks/pr-fixture.json`.
+The test actor may use the command only on generated PRs changing `benchmarks/pr-fixture.json`.
+The start job still requires one of the `authorized_roles` for the test actor.

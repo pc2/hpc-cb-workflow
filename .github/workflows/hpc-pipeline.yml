@@ -28,6 +28,14 @@ on:
         description: The reviewed PR head commit, used with pull_request.
         type: string
         default: ''
+      command_comment:
+        description: The PR comment whose author authorized the run, set by the HPC command.
+        type: string
+        default: ''
+      authorized_roles:
+        description: Repository roles that may start PR runs and runs of other branches, separated by spaces.
+        type: string
+        default: admin maintain
       benchmark:
         description: Optional JSON containing publication settings and benchmark suites.
         type: string
@@ -76,6 +84,62 @@ jobs:
       actions: read
       pull-requests: read
     steps:
+      # Reviewed code on the default branch runs for every trigger, other commits need an authorized person.
+      - name: Authorize the run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ACTOR: ${{ github.triggering_actor }}
+          ROLES: ${{ inputs.authorized_roles }}
+          PR: ${{ inputs.pull_request }}
+          COMMENT: ${{ inputs.command_comment }}
+          SELECTED_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ $ROLES =~ ^[a-z_]+( [a-z_]+)*$ ]]
+          allowed() {
+            local role
+            role=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq .role_name) || return 1
+            [[ " $ROLES " == *" $role "* ]]
+          }
+          if [[ $EVENT != workflow_dispatch ]]; then
+            echo "Started by $EVENT on the default branch."
+            exit 0
+          fi
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          [[ -n $default_branch ]]
+          if [[ -z $PR && -z $COMMENT && $GITHUB_REF == "refs/heads/$default_branch" ]]; then
+            echo "Started on the default branch $default_branch."
+            exit 0
+          fi
+          if [[ -z $COMMENT ]]; then
+            if ! allowed "$ACTOR"; then
+              echo "::error::$ACTOR started the run without one of the roles $ROLES."
+              exit 1
+            fi
+            echo "Started by $ACTOR."
+            exit 0
+          fi
+          # The command dispatches with the comment, its author must hold a role and name the commit.
+          [[ $COMMENT =~ ^[1-9][0-9]*$ && $PR =~ ^[1-9][0-9]*$ ]]
+          comment=$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT")
+          jq -e --arg url "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/issues/$PR" '.issue_url == $url' <<< "$comment" > /dev/null
+          author=$(jq -r .user.login <<< "$comment")
+          if ! allowed "$author"; then
+            echo "::error::Comment $COMMENT was written by $author without one of the roles $ROLES."
+            exit 1
+          fi
+          read -ra words <<< "$(jq -r '.body | gsub("\\s+"; " ")' <<< "$comment")"
+          [[ ${words[0]:-} == /hpc ]]
+          for word in "${words[@]:1}"; do
+            if [[ $word =~ ^[0-9a-f]{7,40}$ && $SELECTED_SHA == "$word"* ]]; then
+              echo "Authorized by $author in comment $COMMENT."
+              exit 0
+            fi
+          done
+          echo "::error::Comment $COMMENT does not name commit $SELECTED_SHA."
+          exit 1
       - name: Validate configuration
         shell: bash
         env:

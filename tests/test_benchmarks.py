@@ -119,11 +119,13 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIsNone(error)
         self.assertEqual(dispatched, commits)
         self.assertTrue(all(inputs['suite'] == 'gpu' and inputs['threads'] == '4' for inputs in self.inputs))
+        self.assertTrue(all(inputs['command_comment'] == '99' for inputs in self.inputs))
         self.assertEqual(replies[0].count('with suite=gpu threads=4'), 2)
 
     def test_command_refuses_invalid_options_without_dispatching(self):
         for body, reason in [(f'/hpc {"c" * 7} source_sha={"d" * 40}', 'set by the command itself'),
                              (f'/hpc {"c" * 7} context_run_id=5', 'set by the command itself'),
+                             (f'/hpc {"c" * 7} command_comment=5', 'set by the command itself'),
                              (f'/hpc {"c" * 7} suite=cpu suite=gpu', 'given twice'),
                              (f'/hpc {"c" * 7} suite=a;b', 'name=value'), (f'/hpc {"c" * 7} 1suite=a', 'name=value'),
                              (f'/hpc {"c" * 7} suite=', 'name=value'), ('/hpc suite=gpu', 'Name the reviewed commits')]:
@@ -206,6 +208,18 @@ class BenchmarkTests(unittest.TestCase):
                     self.assertRegex(str(error), 'cannot authorize')
                 else:
                     self.assertIsNone(error)
+
+    def test_waiting_tolerates_a_job_list_that_lags_behind_the_completed_run(self):
+        run = dict(id=5, status='completed', conclusion='failure', run_attempt=2, html_url='run')
+        report = 'hpc / benchmark (fixture) / report'
+        lists = iter([[dict(name=report, status='in_progress', conclusion=None, run_attempt=2)],
+                      [dict(name=report, status='completed', conclusion='failure', run_attempt=1)],
+                      [dict(name=report, status='completed', conclusion='failure', run_attempt=2)]])
+        with patch.object(pr_integration, 'api', return_value=run), \
+             patch.object(pr_integration, 'items', side_effect=lambda *args: next(lists)), \
+             patch.object(pr_integration.time, 'sleep') as sleep:
+            self.assertEqual(pr_integration.wait_run('pc2/test', 5, 'failure', 2), run)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_pr_creation_uses_the_test_token_without_granting_it_branch_access(self):
         class CreatedPR(Exception):

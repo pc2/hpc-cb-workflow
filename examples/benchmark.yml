@@ -17,6 +17,10 @@ on:
         description: The reviewed PR head commit.
         type: string
         default: ''
+      command_comment:
+        description: The PR comment that authorized the run, set by the HPC command.
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -36,6 +40,8 @@ jobs:
       context_run_id: ${{ inputs.context_run_id }}
       pull_request: ${{ inputs.pull_request }}
       source_sha: ${{ inputs.source_sha }}
+      command_comment: ${{ inputs.command_comment }}
+      authorized_roles: ${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}
       pipeline_variables: EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
       benchmark: >-
         {"mode":"history","branch":"hpc-results","suites":[
