@@ -35,7 +35,7 @@ def pr_commits(repo, number):
 
 
 # Options become workflow dispatch inputs of the caller, these inputs are set by the command itself.
-RESERVED_INPUTS = {'pull_request', 'source_sha', 'context_run_id'}
+RESERVED_INPUTS = {'pull_request', 'source_sha', 'context_run_id', 'command_comment'}
 
 
 def parse_options(words):
@@ -117,7 +117,8 @@ def main():
             try:
                 result = api(f'repos/{repo}/actions/workflows/{workflow}/dispatches',
                              dict(ref=event['repository']['default_branch'], return_run_details=True,
-                                  inputs=dict(options, pull_request=str(number), source_sha=sha)))
+                                  inputs=dict(options, pull_request=str(number), source_sha=sha,
+                                              command_comment=str(event['comment']['id']))))
             except subprocess.CalledProcessError as error:
                 # GitHub validates the options against the caller's inputs, the first dispatch reports a rejection.
                 if lines:

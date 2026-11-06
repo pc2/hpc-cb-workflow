@@ -39,6 +39,10 @@ def wait_run(repo, origin, expected, minimum_attempt=1):
             time.sleep(15)
             continue
         jobs = list(items(f'repos/{repo}/actions/runs/{run_id}/jobs', 'jobs'))
+        # The job list can lag behind the completed run, especially right after a rerun.
+        if any(j['status'] != 'completed' or j.get('run_attempt', 1) != run.get('run_attempt', 1) for j in jobs):
+            time.sleep(15)
+            continue
         report = [j for j in jobs if 'benchmark' in j['name'].lower() and j['conclusion'] in ('success', 'failure')]
         if report:
             if run['conclusion'] != expected:
