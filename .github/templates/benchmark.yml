@@ -94,7 +94,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: steps.report.outputs.recorded == 'true'
         with:
-          name: benchmark-site-${{ strategy.job-index }}-${{ github.job }}-${{ fromJSON(inputs.suite).name }}
+          name: benchmark-site-${{ fromJSON(inputs.suite).name }}
           path: ${{ steps.prepare.outputs.directory }}
           overwrite: true
       - name: Report an unavailable comparison

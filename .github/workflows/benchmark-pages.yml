@@ -12,13 +12,12 @@ permissions:
   pages: write
   id-token: write
 
-concurrency:
-  group: hpc-benchmark-pages
-  cancel-in-progress: false
-
 jobs:
   publish:
     runs-on: ubuntu-latest
+    concurrency:
+      group: hpc-benchmark-pages
+      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

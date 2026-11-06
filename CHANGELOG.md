@@ -11,6 +11,10 @@ The integration suite verifies success, failure and both handover outcomes.
 A Julia measurement follows the GitLab artifact path into GitHub Pages history.
 Pushes, manual runs and weekly runs contribute to the benchmark history.
 Publication retries reuse the saved measurement without creating another point.
+Pages are redeployed after a failing suite, since its point is already recorded.
+A failed benchmark action can no longer report an earlier measurement of the same commit.
+The `/hpc` command accepts surrounding whitespace.
+The manual example accepts `source_sha` and can serve as the PR command target.
 
 The reusable workflow mirrors commits and verifies pipeline identity.
 It reports individual job checks and collects artifacts after failures.

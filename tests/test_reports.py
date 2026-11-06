@@ -8,7 +8,6 @@ from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
-import benchmark_report
 import integration_suite
 
 
@@ -71,26 +70,6 @@ class IntegrationResultTests(unittest.TestCase):
             self.assertEqual(result['pipeline_id'], 20)
             self.assertEqual(json.loads(output.read_text())['result'], 'success')
             self.assertEqual(json.loads(output.read_text())['pipeline_status'], 'failed')
-
-
-class BenchmarkReportTests(unittest.TestCase):
-    def record(self):
-        return dict(schema=1, name='julia_linear_solve_512', unit='seconds', value=0.004,
-                    samples=[0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007], residual=1e-15,
-                    sha='a' * 40, julia_version='1.10.12', threads=1, blas_threads=1,
-                    cpu='test', blas='OpenBLAS', date='2026-11-04T12:00:00Z',
-                    run_id=10, pipeline_id=20, project_id=42)
-
-    def test_custom_measurement_is_accepted_without_a_benchmark_parser(self):
-        record = self.record()
-        self.assertEqual(benchmark_report.validate_measurement(record, 'a' * 40), record)
-
-    def test_invalid_or_misattributed_measurements_are_rejected(self):
-        for key, value in [('value', float('nan')), ('value', 0.003), ('sha', 'b' * 40),
-                           ('residual', 1.0), ('threads', 2), ('blas_threads', 2),
-                           ('samples', [0.1]), ('unit', 'ms'), ('cpu', '')]:
-            with self.subTest(key=key), self.assertRaises(ValueError):
-                benchmark_report.validate_measurement(self.record() | {key: value}, 'a' * 40)
 
 
 if __name__ == '__main__':

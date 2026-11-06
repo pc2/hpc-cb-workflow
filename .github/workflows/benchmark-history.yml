@@ -33,7 +33,7 @@ jobs:
         SCENARIO=benchmark
       benchmark: >-
         {"mode":"pages","branch":"hpc-results","suites":[
-          {"name":"Julia linear solve","archive":"benchmark.zip",
+          {"name":"Linear solve","archive":"benchmark.zip",
            "file":"results/benchmark-action.json","directory":"bench",
            "alert_threshold":"200%","fail_threshold":"1000%"}]}
     secrets:

@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   dispatch:
-    if: github.event.issue.pull_request && github.event.comment.body == '/hpc'
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

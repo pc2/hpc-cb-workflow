@@ -129,16 +129,19 @@ class BenchmarkTests(unittest.TestCase):
     def test_fresh_measurement_requires_the_action_to_attribute_the_correct_commit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            state = dict(context=dict(sha='b' * 40), suite=dict(name='CPU'), record=True,
-                         directory=str(root), previous=None)
-            (root / 'benchmark-state.json').write_text(json.dumps(state))
-            data = dict(entries={'CPU': [dict(commit=dict(id='a' * 40))]})
-            (root / 'data.js').write_text('window.BENCHMARK_DATA = ' + json.dumps(data))
-            with patch.dict(os.environ, dict(RUNNER_TEMP=str(root), OUTCOME='success')), \
-                 patch.object(benchmark, 'command') as command:
-                with self.assertRaisesRegex(ValueError, 'expected measurement'):
-                    benchmark.finish()
-                command.assert_not_called()
+            for entries, recorded in [(0, 'a'), (1, 'b'), (2, 'b')]:
+                with self.subTest(entries=entries, recorded=recorded):
+                    state = dict(context=dict(sha='b' * 40), suite=dict(name='CPU'), record=True,
+                                 directory=str(root), previous=None, entries=entries)
+                    (root / 'benchmark-state.json').write_text(json.dumps(state))
+                    history = [dict(commit=dict(id='b' * 40))] * (entries - 1) + [dict(commit=dict(id=recorded * 40))]
+                    data = dict(entries={'CPU': history})
+                    (root / 'data.js').write_text('window.BENCHMARK_DATA = ' + json.dumps(data))
+                    with patch.dict(os.environ, dict(RUNNER_TEMP=str(root), OUTCOME='failure')), \
+                         patch.object(benchmark, 'command') as command:
+                        with self.assertRaisesRegex(ValueError, 'expected measurement'):
+                            benchmark.finish()
+                        command.assert_not_called()
 
     def test_prepare_selects_a_comparable_baseline_and_blocks_missing_metrics(self):
         with tempfile.TemporaryDirectory() as directory:
