@@ -260,7 +260,8 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(sleep.call_count, 2)
 
     def test_waiting_tolerates_a_job_list_that_lags_behind_the_completed_run(self):
-        run = dict(id=5, status='completed', conclusion='failure', run_attempt=2, html_url='run')
+        run = dict(id=5, status='completed', conclusion='failure', run_attempt=2, html_url='run',
+                   created_at='2026-11-06T10:00:00Z')
         report = 'hpc / benchmark (fixture) / report'
         lists = iter([[dict(name=report, status='in_progress', conclusion=None, run_attempt=2)],
                       [dict(name=report, status='completed', conclusion='failure', run_attempt=1)],
@@ -270,6 +271,25 @@ class BenchmarkTests(unittest.TestCase):
              patch.object(pr_integration.time, 'sleep') as sleep:
             self.assertEqual(pr_integration.wait_run('pc2/test', 5, 'failure', 2), run)
         self.assertEqual(sleep.call_count, 2)
+
+    def test_waiting_lists_only_runs_created_after_the_original_run(self):
+        runs = {5: dict(id=5, status='completed', conclusion='success', run_attempt=1, html_url='origin',
+                        created_at='2026-11-06T10:00:00Z'),
+                9: dict(id=9, status='completed', conclusion='success', run_attempt=1, html_url='resume',
+                        created_at='2026-11-06T10:06:00Z')}
+        paths = []
+        def items(path, key):
+            paths.append(path)
+            if key == 'jobs':
+                name = 'hpc / benchmark (fixture) / report' if '/runs/9/' in path else 'hpc / Monitor GitLab jobs'
+                return [dict(name=name, status='completed', conclusion='success', run_attempt=1)]
+            return [dict(id=9, display_title='PR benchmark resume 5')]
+        with patch.object(pr_integration, 'api', side_effect=lambda path: runs[int(path.rsplit('/', 1)[1])]), \
+             patch.object(pr_integration, 'items', side_effect=items), patch.object(pr_integration.time, 'sleep'):
+            self.assertEqual(pr_integration.wait_run('pc2/test', 5, 'success')['id'], 9)
+        listings = [path for path in paths if '/workflows/' in path]
+        self.assertEqual(listings, ['repos/pc2/test/actions/workflows/hpc-pr.yml/runs?event=workflow_dispatch'
+                                    '&created=%3E%3D2026-11-06T10%3A00%3A00Z'])
 
     def test_pr_creation_uses_the_test_token_without_granting_it_branch_access(self):
         class CreatedPR(Exception):

@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from urllib.parse import quote
 
 from integration_suite import artifact, items
 
@@ -33,8 +34,10 @@ def api(path, body=None, method=None, token=None):
 def wait_run(repo, origin, expected, minimum_attempt=1):
     deadline = time.monotonic() + 3600
     run_id = origin
+    since = None
     while time.monotonic() < deadline:
         run = api(f'repos/{repo}/actions/runs/{run_id}')
+        since = since or run['created_at']
         if run['status'] != 'completed' or run.get('run_attempt', 1) < minimum_attempt:
             time.sleep(15)
             continue
@@ -50,7 +53,9 @@ def wait_run(repo, origin, expected, minimum_attempt=1):
             return run
         if run['conclusion'] != 'success':
             raise AssertionError(f'Pipeline failed before reporting, {run["html_url"]}.')
-        candidates = items(f'repos/{repo}/actions/workflows/hpc-pr.yml/runs?event=workflow_dispatch', 'workflow_runs')
+        # Continuations start after the original run, so older history need not be listed.
+        candidates = items(f'repos/{repo}/actions/workflows/hpc-pr.yml/runs?event=workflow_dispatch'
+                           f'&created={quote(">=" + since)}', 'workflow_runs')
         next_run = next((r for r in candidates if r['id'] > run_id and
                          r['display_title'] == f'PR benchmark resume {origin}'), None)
         if next_run:
