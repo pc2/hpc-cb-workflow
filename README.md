@@ -99,6 +99,7 @@ workflow:
 | `gitlab_hostname` | The GitLab hostname without a protocol prefix. |
 | `gitlab_project_id` | The numeric GitLab project ID. |
 | `pipeline_variables` | Additional pipeline variables, one `KEY=VALUE` per line, each key once. |
+| `variable_patterns` | Allowed values, one `NAME=REGEX` per line for variables in `pipeline_variables`, matching the whole value. |
 | `context_run_id` | The original GitHub run, used to resume monitoring. |
 | `pull_request` | An optional open PR that contains the selected commit. |
 | `source_sha` | A reviewed commit of the PR, verified against `pull_request`. |
@@ -219,6 +220,14 @@ jobs:
 ```
 
 GitLab rules such as `if: $SUITE == "all" || $SUITE == "gpu"` then select the jobs.
+Free text inputs, for example several suites joined by `+`, need a pattern, otherwise any value reaches GitLab.
+
+```yaml
+      pipeline_variables: SUITES=${{ inputs.suites || 'all' }}
+      variable_patterns: SUITES=(all|cpu|gpu)(\+(cpu|gpu))*
+```
+
+A value outside its pattern stops the run before anything is pushed to GitLab.
 A caller with benchmarks must only list suites whose jobs run for the selected options.
 Continuation runs keep the variables and benchmark configuration of the original start.
 

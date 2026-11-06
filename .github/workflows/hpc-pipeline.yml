@@ -16,6 +16,10 @@ on:
       pipeline_variables:
         type: string
         default: ''
+      variable_patterns:
+        description: Allowed values of pipeline variables, one NAME=REGEX per line, the expression must match the whole value.
+        type: string
+        default: ''
       context_run_id:
         description: The original GitHub run, set when resuming monitoring.
         type: string
@@ -192,6 +196,7 @@ jobs:
         shell: bash
         env:
           PIPELINE_VARIABLES: ${{ inputs.pipeline_variables }}
+          VARIABLE_PATTERNS: ${{ inputs.variable_patterns }}
           SELECTED_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
         run: |
           set -euo pipefail
@@ -214,9 +219,25 @@ jobs:
               continue
             fi
             [[ -z ${seen[$key]:-} ]] || fail "The pipeline variable $key is set twice."
-            seen[$key]=1
+            seen[$key]=${line#*=}
             lines+=("$line")
           done <<< "$PIPELINE_VARIABLES"
+          # Patterns restrict values that reach GitLab, for example inputs forwarded from a PR command.
+          while IFS= read -r line; do
+            [[ -n $line ]] || continue
+            key=${line%%=*}
+            pattern=${line#*=}
+            if [[ $key == "$line" || ! $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ || -z $pattern ]]; then
+              fail "The variable pattern line '$line' is not of the form NAME=REGEX."
+            fi
+            [[ -n ${seen[$key]+set} && $key != EXPECTED_COMMIT_SHA ]] ||
+              fail "The variable pattern names $key, which pipeline_variables does not set."
+            value=${seen[$key]}
+            status=0
+            [[ $value =~ ^($pattern)$ ]] || status=$?
+            [[ $status != 2 ]] || fail "The variable pattern for $key is not a valid extended regular expression."
+            [[ $status == 0 ]] || fail "The pipeline variable $key has the value '$value', which does not match $pattern."
+          done <<< "$VARIABLE_PATTERNS"
           delimiter=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
           {
             echo "lines<<$delimiter"

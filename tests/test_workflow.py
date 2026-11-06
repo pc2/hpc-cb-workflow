@@ -399,7 +399,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         'POLL_TIMEOUT': '0', 'MAX_WAIT_MINUTES': '0', 'CHECK_RUNS': 'true', 'SUMMARY': 'true',
         'LOG_TRACES': 'false', 'CHECK_PREFIX': 'gitlab/42/123/', 'STATUS_CONTEXT': 'gitlab-ci/123',
         'RUNNER_TEMP': str(fixture), 'MOCK_STATUS': 'success', 'DATE_CALLED': str(fixture / 'date'),
-        'SET_STATUS': 'false',
+        'SET_STATUS': 'false', 'VARIABLE_PATTERNS': '',
         'PIPELINE_READ_COUNT': str(fixture / 'pipeline-reads'),
         'GIT_ARGUMENT_LOG': str(fixture / 'git.jsonl'),
     }
@@ -528,6 +528,28 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         assert by_name['Start GitLab pipeline']['env']['PIPELINE_VARIABLES'] == '${{ steps.variables.outputs.lines }}'
 
     test_the_workflow_sets_the_expected_commit_and_checks_caller_variables()
+
+    def test_variable_patterns_restrict_the_values_reaching_gitlab():
+        compose = by_name['Compose pipeline variables']['run']
+        patterns = 'HPC_CHECKS=(all|cpu|mpi|gpu)(\\+(all|cpu|mpi|gpu))*\nHPC_JULIA=(all|1\\.10|1\\.13)(\\+(all|1\\.10|1\\.13))*\n'
+        def check(variables, patterns=patterns):
+            return run(compose, {'PIPELINE_VARIABLES': variables, 'VARIABLE_PATTERNS': patterns, 'SELECTED_SHA': 'a' * 40})
+        for variables in ('HPC_CHECKS=all\nHPC_JULIA=all', 'HPC_CHECKS=cpu+gpu\nHPC_JULIA=1.10+1.13'):
+            result = check(variables)
+            assert result.returncode == 0, (variables, result.stdout)
+        for variables, extra, message in [
+                ('HPC_CHECKS=gpus\nHPC_JULIA=all', None, 'does not match'),
+                ('HPC_CHECKS=all\nHPC_JULIA=1x10', None, 'does not match'),
+                ('HPC_CHECKS=all;id\nHPC_JULIA=all', None, 'does not match'),
+                ('HPC_CHECKS=all', None, 'does not set'),
+                ('HPC_CHECKS=all', 'HPC_CHECKS=(all', 'not a valid'),
+                ('HPC_CHECKS=all', 'HPC_CHECKS=', 'NAME=REGEX'),
+                ('HPC_CHECKS=all', 'EXPECTED_COMMIT_SHA=.*', 'does not set')]:
+            result = check(variables, extra if extra is not None else patterns)
+            assert result.returncode != 0 and message in result.stdout, (variables, extra, result.stdout)
+        assert check('SUITE=gpu', '').returncode == 0
+
+    test_variable_patterns_restrict_the_values_reaching_gitlab()
 
     def test_configuration_errors_name_the_input_to_fix():
         validate = by_name['Validate configuration']['run']
