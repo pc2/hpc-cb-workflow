@@ -43,7 +43,7 @@ assert set(caller['on']) == {'workflow_dispatch'}
 assert 'workflow_call' in workflow['on']
 assert caller['permissions'] == workflow['permissions']
 assert 'statuses' not in caller['permissions']
-assert caller['jobs']['hpc']['with']['pipeline_variables'] == 'EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}'
+assert 'pipeline_variables' not in caller['jobs']['hpc']['with']
 assert set(caller['on']['workflow_dispatch']['inputs']) == {'context_run_id', 'pull_request', 'source_sha', 'command_comment'}
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
@@ -72,7 +72,7 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert hpc['if'] == "vars.GITLAB_PROJECT_ID != ''"
     assert set(hpc['with']) <= set(workflow['on']['workflow_call']['inputs'])
     assert hpc['with']['context_run_id'] == '${{ inputs.context_run_id }}'
-    assert hpc['with']['pipeline_variables'].splitlines()[0] == 'EXPECTED_COMMIT_SHA=${{ github.sha }}'
+    assert 'EXPECTED_COMMIT_SHA' not in hpc['with']['pipeline_variables']
     assert hpc['secrets'] == {'GITLAB_TOKEN': '${{ secrets.GITLAB_TOKEN }}',
                               'GITLAB_TRIGGER_TOKEN': '${{ secrets.GITLAB_TRIGGER_TOKEN }}'}
     verify = integration['jobs']['verify']
@@ -472,6 +472,32 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
             assert (result.returncode == 0) == accepted, (selected, named, result.stdout, result.stderr)
 
     test_command_authorization_requires_the_full_selected_commit_hash()
+
+    def test_the_workflow_sets_the_expected_commit_and_checks_caller_variables():
+        compose = by_name['Compose pipeline variables']['run']
+        sha = 'a' * 40
+        def composed(variables, selected=sha):
+            result = run(compose, {'PIPELINE_VARIABLES': variables, 'SELECTED_SHA': selected})
+            if result.returncode:
+                return None, result.stdout
+            text = output.read_text()
+            delimiter = text.splitlines()[0].removeprefix('lines<<')
+            return text.split('\n', 1)[1].split(delimiter)[0].splitlines(), result.stdout
+        assert composed('')[0] == [f'EXPECTED_COMMIT_SHA={sha}']
+        assert composed(f'SUITE=gpu\n\nNOTE=a=b c\nEXPECTED_COMMIT_SHA={sha}')[0] == [
+            f'EXPECTED_COMMIT_SHA={sha}', 'SUITE=gpu', 'NOTE=a=b c']
+        for variables, message in [(f'EXPECTED_COMMIT_SHA={"b" * 40}', 'Omit EXPECTED_COMMIT_SHA'),
+                                   ('SUITE=cpu\nSUITE=gpu', 'set twice'), ('invalid line', 'KEY=VALUE'),
+                                   ('1SUITE=gpu', 'KEY=VALUE')]:
+            lines, stdout = composed(variables)
+            assert lines is None and message in stdout, (variables, stdout)
+        assert composed('', selected='main')[0] is None
+        start = jobs['start']['steps']
+        names = [step['name'] for step in start]
+        assert names.index('Compose pipeline variables') < names.index('Push the selected commit to GitLab')
+        assert by_name['Start GitLab pipeline']['env']['PIPELINE_VARIABLES'] == '${{ steps.variables.outputs.lines }}'
+
+    test_the_workflow_sets_the_expected_commit_and_checks_caller_variables()
 
     validate = by_name['Validate configuration']['run']
     assert run(validate).returncode == 0

@@ -17,6 +17,7 @@ The `/hpc <commit> [<commit> ...]` command dispatches the named reviewed commits
 Approval requires full 40 character commit hashes in the command and start job.
 Command options `name=value` set the caller's dispatch inputs, the PR command test verifies a refused and an accepted option.
 The command and start job require repository write access for the person authorizing PR runs and runs of other branches.
+The workflow sets EXPECTED_COMMIT_SHA itself and rejects malformed or duplicate pipeline variables.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.
 GitLab outages are retried during monitoring and continuation dispatches are retried.
 Checks and collected artifacts include all jobs and child pipelines.

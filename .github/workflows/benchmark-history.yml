@@ -29,7 +29,6 @@ jobs:
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
       context_run_id: ${{ inputs.context_run_id }}
       pipeline_variables: |
-        EXPECTED_COMMIT_SHA=${{ github.sha }}
         SCENARIO=benchmark
       benchmark: >-
         {"mode":"pages","branch":"hpc-results","suites":[

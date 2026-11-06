@@ -153,6 +153,43 @@ jobs:
           [[ -z $SELECTED_SHA || ( -n $PR && $SELECTED_SHA =~ ^[0-9a-f]{40}$ ) ]]
           jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK"
           [[ $EXPECTED_PIPELINE_STATUS == success || $EXPECTED_PIPELINE_STATUS == failed ]]
+      # The GitLab workflow rule compares EXPECTED_COMMIT_SHA with the mirrored commit, so callers cannot get it wrong.
+      - name: Compose pipeline variables
+        id: variables
+        shell: bash
+        env:
+          PIPELINE_VARIABLES: ${{ inputs.pipeline_variables }}
+          SELECTED_SHA: ${{ inputs.source_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          [[ $SELECTED_SHA =~ ^[0-9a-f]{40}$ ]]
+          lines=("EXPECTED_COMMIT_SHA=$SELECTED_SHA")
+          declare -A seen=([EXPECTED_COMMIT_SHA]=1)
+          while IFS= read -r line; do
+            [[ -n $line ]] || continue
+            key=${line%%=*}
+            if [[ $key == "$line" || ! $key =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+              fail "The pipeline variable line '$line' is not of the form KEY=VALUE."
+            fi
+            if [[ $key == EXPECTED_COMMIT_SHA ]]; then
+              [[ ${line#*=} == "$SELECTED_SHA" ]] ||
+                fail "Omit EXPECTED_COMMIT_SHA from pipeline_variables, the workflow sets it to $SELECTED_SHA."
+              continue
+            fi
+            [[ -z ${seen[$key]:-} ]] || fail "The pipeline variable $key is set twice."
+            seen[$key]=1
+            lines+=("$line")
+          done <<< "$PIPELINE_VARIABLES"
+          delimiter=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+          {
+            echo "lines<<$delimiter"
+            printf '%s\n' "${lines[@]}"
+            echo "$delimiter"
+          } >> "$GITHUB_OUTPUT"
       - name: Verify PR commit
         if: inputs.pull_request != ''
         shell: bash
@@ -175,7 +212,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Push the selected commit to GitLab
-        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
+        uses: pc2/github2lab_action@74a6aac30255fabf1717a7842bd5c2c3ae9b18ee
         env:
           MODE: mirror
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -185,12 +222,12 @@ jobs:
           FORCE_PUSH: 'true'
       - name: Start GitLab pipeline
         id: trigger
-        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
+        uses: pc2/github2lab_action@74a6aac30255fabf1717a7842bd5c2c3ae9b18ee
         env:
           MODE: trigger
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
           PIPELINE_REF: ${{ inputs.source_sha && format('hpc-pr-{0}-{1}', inputs.pull_request, inputs.source_sha) || github.ref_name }}
-          PIPELINE_VARIABLES: ${{ inputs.pipeline_variables }}
+          PIPELINE_VARIABLES: ${{ steps.variables.outputs.lines }}
       - name: Save pipeline context
         shell: bash
         env:
@@ -208,10 +245,14 @@ jobs:
           pipeline=$(curl --fail --silent --show-error --retry 3 --max-time 60 \
             --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
             "https://$GITLAB_HOSTNAME/api/v4/projects/$GITLAB_PROJECT_ID/pipelines/$PIPELINE_ID")
-          jq -e --arg sha "$SOURCE_SHA" --arg ref "$SOURCE_REF" \
+          if ! jq -e --arg sha "$SOURCE_SHA" --arg ref "$SOURCE_REF" \
             --argjson project "$GITLAB_PROJECT_ID" --argjson id "$PIPELINE_ID" \
             '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
-              and .source == "trigger"' <<< "$pipeline"
+              and .source == "trigger"' <<< "$pipeline" > /dev/null; then
+            echo "::error::GitLab pipeline $PIPELINE_ID runs commit $(jq -r .sha <<< "$pipeline") on $(jq -r .ref <<< "$pipeline") instead of $SOURCE_SHA on $SOURCE_REF." \
+              "Add the EXPECTED_COMMIT_SHA workflow rule to .gitlab-ci.yml and cancel the pipeline in GitLab."
+            exit 1
+          fi
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           mkdir -p "$RUNNER_TEMP/hpc-context"
           jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK"
@@ -341,7 +382,7 @@ jobs:
       - name: Follow GitLab jobs
         id: poll
         continue-on-error: true
-        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
+        uses: pc2/github2lab_action@74a6aac30255fabf1717a7842bd5c2c3ae9b18ee
         env:
           MODE: get_status
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -447,7 +488,7 @@ jobs:
           echo "$RUNNER_TEMP/github2lab-python/bin" >> "$GITHUB_PATH"
       - name: Collect GitLab artifacts
         id: artifacts
-        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
+        uses: pc2/github2lab_action@74a6aac30255fabf1717a7842bd5c2c3ae9b18ee
         env:
           MODE: get_artifact
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}

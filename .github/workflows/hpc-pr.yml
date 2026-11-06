@@ -46,7 +46,6 @@ jobs:
       context_run_id: ${{ inputs.context_run_id }}
       max_wait_minutes: ${{ inputs.source_sha != '' && inputs.context_run_id == '' && '1' || '330' }}
       pipeline_variables: |
-        EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
         SCENARIO=regression
         HANDOVER=${{ inputs.source_sha != '' && 'true' || 'false' }}
       benchmark: >-

@@ -81,13 +81,13 @@ jobs:
       pull_request: ${{ inputs.pull_request }}
       source_sha: ${{ inputs.source_sha }}
       command_comment: ${{ inputs.command_comment }}
-      pipeline_variables: EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
 ```
 
 The GitLab pipeline must accept only triggers for the mirrored commit, otherwise jobs for another branch head can start.
+The workflow passes the selected commit as `EXPECTED_COMMIT_SHA`, the rule compares it with the commit GitLab runs.
 Two pushes to the default branch within seconds mirror different commits to the same GitLab branch, the rule then fails the older run instead of testing the wrong commit.
 
 ```yaml
@@ -102,7 +102,7 @@ workflow:
 | --- | --- |
 | `gitlab_hostname` | The GitLab hostname without a protocol prefix. |
 | `gitlab_project_id` | The numeric GitLab project ID. |
-| `pipeline_variables` | Pipeline variables, one `KEY=VALUE` per line. |
+| `pipeline_variables` | Additional pipeline variables, one `KEY=VALUE` per line, each key once. |
 | `context_run_id` | The original GitHub run, used to resume monitoring. |
 | `pull_request` | An optional open PR that contains the selected commit. |
 | `source_sha` | A reviewed commit of the PR, verified against `pull_request`. |
@@ -216,9 +216,7 @@ on:
 jobs:
   hpc:
     with:
-      pipeline_variables: |
-        EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
-        SUITE=${{ inputs.suite || 'all' }}
+      pipeline_variables: SUITE=${{ inputs.suite || 'all' }}
 ```
 
 GitLab rules such as `if: $SUITE == "all" || $SUITE == "gpu"` then select the jobs.
