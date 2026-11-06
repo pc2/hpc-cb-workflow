@@ -59,7 +59,7 @@ class BenchmarkTests(unittest.TestCase):
                 benchmark.relative_path(path)
 
     def command(self, body, commits, role='maintain', fail_dispatch_after=None, reject=None,
-                permission='write'):
+                permission='write', workflow='hpc.yml'):
         head = commits[-1]
         pr = dict(state='open', head=dict(sha=head, ref='feature', repo=dict(full_name='pc2/test')),
                   user=dict(login='author'), title='Feature')
@@ -88,7 +88,7 @@ class BenchmarkTests(unittest.TestCase):
             event.write_text(json.dumps(dict(
                 issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
                 comment=dict(id=99, body=body, user=dict(login='maintainer')))))
-            env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test')
+            env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test', CB_COMMAND_WORKFLOW=workflow)
             error = None
             with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
                 try:
@@ -96,6 +96,7 @@ class BenchmarkTests(unittest.TestCase):
                 except (ValueError, RuntimeError, subprocess.CalledProcessError) as raised:
                     error = raised
         self.inputs = [data['inputs'] for path, data in calls if path.endswith('/dispatches')]
+        self.paths = [path for path, _ in calls]
         rejected = reject[0] if reject else len(self.inputs)
         dispatched = [inputs['source_sha'] for inputs in self.inputs[:rejected]]
         replies = [data['body'] for path, data in calls if path.endswith('/issues/7/comments')]
@@ -230,6 +231,16 @@ class BenchmarkTests(unittest.TestCase):
                                                     role=role, permission=permission)
                 self.assertIsNone(error)
                 self.assertEqual(dispatched, ['c' * 40])
+
+    def test_command_dispatches_the_named_caller_workflow_only(self):
+        dispatched, _, error = self.command(f'/hpc {"c" * 40}', ['c' * 40])
+        self.assertIsNone(error)
+        self.assertTrue(any(path.endswith('/workflows/hpc.yml/dispatches') for path in self.paths))
+        for workflow in ('', 'hpc', '../hpc.yml', 'a b.yml'):
+            with self.subTest(workflow=workflow):
+                dispatched, replies, error = self.command(f'/hpc {"c" * 40}', ['c' * 40], workflow=workflow)
+                self.assertEqual(dispatched, [])
+                self.assertRegex(str(error), 'caller workflow file')
 
     def test_command_rejects_users_without_write_access(self):
         for role, permission in [('read', 'read'), ('triage', 'read'), ('none', 'none'),

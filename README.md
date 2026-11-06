@@ -41,7 +41,6 @@ GitLab operations use `pc2/github2lab_action`, all action references are pinned 
 The [manual example](examples/manual.yml) and [benchmark example](examples/benchmark.yml) are complete callers.
 Replace `REVIEWED_COMMIT` with the published workflow commit.
 The four dispatch inputs are required, continuation dispatches the caller with `context_run_id` and the PR command dispatches it with `pull_request`, `source_sha` and `command_comment`.
-Save the caller as `hpc-pr.yml` or name it in the `CB_COMMAND_WORKFLOW` variable.
 GitLab reads `.gitlab-ci.yml` from the mirrored commit, so it lives in the caller repository.
 
 ```yaml
@@ -183,10 +182,12 @@ For an existing documentation site, use `history` and copy the directory from th
 
 ## PR command
 
-Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment `/hpc <commit> [<commit> ...]`.
+Reviewed PRs run with a comment `/hpc <commit> [<commit> ...]`.
+Copy the [command example](examples/command.yml) into the caller repository, set `workflow` to the caller's file name and replace `REVIEWED_COMMIT`.
+GitHub starts comment workflows only in the commented repository, so this stub listens there and calls the command in this repository.
 Each commit requires its full 40 character hexadecimal hash and must belong to the PR.
 The full hash binds approval to the reviewed commit even if the PR changes before dispatch.
-It verifies the commenter's repository write access and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default, once per commit.
+It verifies the commenter's repository write access and dispatches the caller once per commit.
 The start job checks the comment author for repository write access again.
 Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.

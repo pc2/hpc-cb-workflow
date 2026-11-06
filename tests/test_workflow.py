@@ -45,6 +45,17 @@ assert caller['permissions'] == workflow['permissions']
 assert 'statuses' not in caller['permissions']
 assert 'pipeline_variables' not in caller['jobs']['hpc']['with']
 assert set(caller['on']['workflow_dispatch']['inputs']) == {'context_run_id', 'pull_request', 'source_sha', 'command_comment'}
+command = yaml.load((root / '.github/workflows/hpc-command.yml').read_text(), Loader=yaml.BaseLoader)
+assert set(command['on']) == {'workflow_call'}
+assert command['on']['workflow_call']['inputs']['workflow']['required'] == 'true'
+assert command['jobs']['dispatch']['steps'][0]['env']['CB_COMMAND_WORKFLOW'] == '${{ inputs.workflow }}'
+for stub_path, target, workflow_file in [('.github/workflows/pr-command.yml', './.github/workflows/hpc-command.yml', 'hpc-pr.yml'),
+                                         ('examples/command.yml', 'pc2/hpc-cb-workflow/.github/workflows/hpc-command.yml@REVIEWED_COMMIT', 'hpc.yml')]:
+    stub = yaml.load((root / stub_path).read_text(), Loader=yaml.BaseLoader)
+    assert stub['on'] == {'issue_comment': {'types': ['created']}}, stub_path
+    assert stub['permissions'] == command['permissions'], stub_path
+    assert stub['jobs']['hpc']['uses'] == target and stub['jobs']['hpc']['with'] == {'workflow': workflow_file}
+    assert stub['jobs']['hpc']['if'] == "github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')"
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
     assert forwarded['command_comment'] == '${{ inputs.command_comment }}', example

@@ -1,8 +1,13 @@
 name: HPC command
 
+# Comments trigger workflows only in their own repository, so callers keep a stub listening for issue_comment.
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      workflow:
+        description: The caller workflow file to dispatch for each named commit, for example hpc.yml.
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -11,14 +16,14 @@ permissions:
 
 jobs:
   dispatch:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Authorize and dispatch the PR
         env:
           GH_TOKEN: ${{ github.token }}
-          CB_COMMAND_WORKFLOW: ${{ vars.CB_COMMAND_WORKFLOW || 'hpc-pr.yml' }}
+          CB_COMMAND_WORKFLOW: ${{ inputs.workflow }}
         run: |
           python3 - <<'PY'
           # EMBED hpc_command.py

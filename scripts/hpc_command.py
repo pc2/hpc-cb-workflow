@@ -94,7 +94,9 @@ def main():
 
     if reasons:
         refuse(reasons)
-    workflow = os.environ.get('CB_COMMAND_WORKFLOW') or 'hpc-pr.yml'
+    workflow = os.environ.get('CB_COMMAND_WORKFLOW', '')
+    if not re.fullmatch(r'[A-Za-z0-9._-]+\.ya?ml', workflow):
+        raise ValueError('Name the caller workflow file to dispatch, for example hpc.yml.')
     described = ''.join(f' {name}={value}' for name, value in options.items())
     lines = []
     try:

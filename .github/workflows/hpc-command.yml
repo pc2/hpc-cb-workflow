@@ -1,8 +1,13 @@
 name: HPC command
 
+# Comments trigger workflows only in their own repository, so callers keep a stub listening for issue_comment.
 on:
-  issue_comment:
-    types: [created]
+  workflow_call:
+    inputs:
+      workflow:
+        description: The caller workflow file to dispatch for each named commit, for example hpc.yml.
+        type: string
+        required: true
 
 permissions:
   contents: read
@@ -11,14 +16,14 @@ permissions:
 
 jobs:
   dispatch:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')
+    if: github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Authorize and dispatch the PR
         env:
           GH_TOKEN: ${{ github.token }}
-          CB_COMMAND_WORKFLOW: ${{ vars.CB_COMMAND_WORKFLOW || 'hpc-pr.yml' }}
+          CB_COMMAND_WORKFLOW: ${{ inputs.workflow }}
         run: |
           python3 - <<'PY'
           """Authorize a reviewed PR commit and dispatch its HPC caller."""
@@ -117,7 +122,9 @@ jobs:
           
               if reasons:
                   refuse(reasons)
-              workflow = os.environ.get('CB_COMMAND_WORKFLOW') or 'hpc-pr.yml'
+              workflow = os.environ.get('CB_COMMAND_WORKFLOW', '')
+              if not re.fullmatch(r'[A-Za-z0-9._-]+\.ya?ml', workflow):
+                  raise ValueError('Name the caller workflow file to dispatch, for example hpc.yml.')
               described = ''.join(f' {name}={value}' for name, value in options.items())
               lines = []
               try:
