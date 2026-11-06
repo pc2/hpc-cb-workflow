@@ -121,6 +121,7 @@ Continuation stops after seven days, the summary names the original run ID for a
 A pipeline blocked by a manual job ends the monitoring with status `manual` and fails the run.
 Optional manual jobs do not block.
 Collect uploads the GitLab artifacts with a thirty day retention and posts one PR comment per pipeline.
+A PR run that fails before collection comments with the failed step instead.
 Child pipeline archives are named `<trigger job>_<job>.zip`.
 Collection fails when the pipeline fails or an artifact download fails, unless `expected_pipeline_status` requires the failure.
 A pipeline without artifacts passes, the summary reports the number of collected archives.

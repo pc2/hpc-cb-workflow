@@ -20,6 +20,7 @@ The command and start job require repository write access for the person authori
 The workflow sets EXPECTED_COMMIT_SHA itself and rejects malformed or duplicate pipeline variables.
 The PR command is a reusable workflow, callers keep a short stub and name their caller in its workflow input.
 The workflow reads context_run_id, pull_request, source_sha and command_comment from the caller's dispatch, callers only declare them.
+Configuration, PR and resume checks name the input or state to fix, PR runs failing before collection comment on the PR.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.
 GitLab outages are retried during monitoring and continuation dispatches are retried.
 Checks and collected artifacts include all jobs and child pipelines.

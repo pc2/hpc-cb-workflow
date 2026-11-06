@@ -20,7 +20,7 @@ suite = yaml.load((root / '.github/workflows/integration-suite.yml').read_text()
 history = yaml.load((root / '.github/workflows/benchmark-history.yml').read_text(), Loader=yaml.BaseLoader)
 gitlab_ci = yaml.load((root / '.gitlab-ci.yml').read_text(), Loader=yaml.BaseLoader)
 jobs = workflow['jobs']
-assert set(jobs) == {'start', 'wait', 'collect', 'benchmark', 'pages'}
+assert set(jobs) == {'start', 'wait', 'collect', 'failure', 'benchmark', 'pages'}
 steps = [step for job in jobs.values() for step in job.get('steps', [])]
 by_name = {step['name']: step for step in steps}
 action_revisions = {step['uses'].split('@')[1] for step in steps
@@ -168,6 +168,7 @@ assert any(line.startswith('requests==') for line in requirements)
 assert 'env' not in prepare
 token_scopes = {
     'Authorize the run': {'GH_TOKEN'},
+    'Comment on the PR': {'GH_TOKEN'},
     'Validate configuration': {'GITLAB_TOKEN', 'GITLAB_TRIGGER_TOKEN'},
     'Push the selected commit to GitLab': {'GITLAB_TOKEN'},
     'Start GitLab pipeline': {'GITLAB_TRIGGER_TOKEN'},
@@ -338,6 +339,8 @@ elif '/collaborators/' in endpoint:
     value = {'permission': permissions[login]}
 elif '/issues/comments/' in endpoint:
     value = json.loads(os.environ['MOCK_COMMENT'])
+elif '/attempts/' in endpoint and '/jobs' in endpoint:
+    value = json.loads(os.environ['MOCK_JOBS'])
 elif '/actions/runs/' in endpoint:
     value = {'workflow_id': 88} if endpoint.endswith('/901') else json.loads(Path(os.environ['ORIGIN_RESPONSE']).read_text())
 elif endpoint.endswith('/commits') and '/pulls/' in endpoint:
@@ -525,6 +528,44 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         assert by_name['Start GitLab pipeline']['env']['PIPELINE_VARIABLES'] == '${{ steps.variables.outputs.lines }}'
 
     test_the_workflow_sets_the_expected_commit_and_checks_caller_variables()
+
+    def test_configuration_errors_name_the_input_to_fix():
+        validate = by_name['Validate configuration']['run']
+        for overrides, message in [({'GITLAB_PROJECT_ID': 'group/project'}, 'gitlab_project_id'),
+                                   ({'GITLAB_HOSTNAME': 'https://git.example'}, 'gitlab_hostname'),
+                                   ({'GITLAB_TOKEN': ''}, 'GITLAB_TOKEN'), ({'PR': 'seven'}, 'pull_request must'),
+                                   ({'PR': '', 'SELECTED_SHA': 'a' * 40}, 'source_sha needs pull_request'),
+                                   ({'SELECTED_SHA': 'a' * 7}, 'full 40 character'), ({'BENCHMARK': '[]'}, 'benchmark must'),
+                                   ({'EXPECTED_PIPELINE_STATUS': 'canceled'}, 'expected_pipeline_status')]:
+            result = run(validate, {'SELECTED_SHA': ''} | overrides)
+            assert result.returncode != 0 and f'::error::' in result.stdout and message in result.stdout, (overrides, result.stdout)
+        final = by_name['Set final result']['run']
+        for overrides, message in [({'STATUS': 'failed'}, 'finished with failed'), ({'DOWNLOAD_OUTCOME': 'failure'}, 'Downloading'),
+                                   ({'UPLOAD_OUTCOME': 'failure'}, 'Uploading')]:
+            result = run(final, overrides)
+            assert result.returncode != 0 and message in result.stdout, (overrides, result.stdout)
+
+    test_configuration_errors_name_the_input_to_fix()
+
+    def test_runs_failing_before_collection_are_reported_to_the_pr():
+        failure = jobs['failure']
+        assert failure['needs'] == ['start', 'wait']
+        assert "failure()" in failure['if'] and 'github.event.inputs.pull_request' in failure['if']
+        assert failure['permissions'] == {'actions': 'read', 'pull-requests': 'write'}
+        comment = by_name['Comment on the PR']['run']
+        failed_jobs = {'jobs': [{'name': 'hpc / Start on GitLab', 'conclusion': 'failure',
+                                 'steps': [{'name': 'Validate configuration', 'conclusion': 'success'},
+                                           {'name': 'Verify PR commit', 'conclusion': 'failure'}]}]}
+        result = run(comment, {'PR': '7', 'GITHUB_RUN_ATTEMPT': '1', 'MOCK_JOBS': json.dumps(failed_jobs)})
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        posts = [call for call in map(json.loads, gh_log.read_text().splitlines()) if '--method' in call]
+        assert len(posts) == 1 and posts[0][posts[0].index('--method') + 1] == 'POST'
+        body = next(arg for arg in posts[0] if arg.startswith('body='))
+        assert 'hpc / Start on GitLab, step Verify PR commit' in body and 'a' * 40 in body and '/actions/runs/900' in body
+        assert run(comment, {'PR': '', 'MOCK_JOBS': json.dumps(failed_jobs)}).returncode == 0
+        assert not any('--method' in call for call in map(json.loads, gh_log.read_text().splitlines()))
+
+    test_runs_failing_before_collection_are_reported_to_the_pr()
 
     validate = by_name['Validate configuration']['run']
     assert run(validate).returncode == 0
