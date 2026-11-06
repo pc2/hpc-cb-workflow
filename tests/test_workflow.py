@@ -59,7 +59,7 @@ for stub_path, target, workflow_file in [('.github/workflows/pr-command.yml', '.
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
     assert not {'context_run_id', 'pull_request', 'source_sha', 'command_comment'} & set(forwarded), example
-assert caller['jobs']['hpc']['if'] == "vars.GITLAB_PROJECT_ID != ''"
+assert 'if' not in caller['jobs']['hpc']
 assert caller['jobs']['hpc']['uses'].endswith('@REVIEWED_COMMIT')
 assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['required'] == 'false'
 assert workflow['on']['workflow_call']['inputs']['max_wait_minutes']['default'] == '330'
@@ -109,16 +109,16 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
 assert jobs['wait']['timeout-minutes'] == '345'
 assert "(inputs.context_run_id || github.event.inputs.context_run_id) == ''" in jobs['start']['if']
 assert "(inputs.context_run_id || github.event.inputs.context_run_id) != ''" in jobs['wait']['if']
-assert "github.event_name == 'workflow_dispatch'" in jobs['start']['if']
-assert "github.event_name == 'schedule'" in jobs['start']['if']
+assert "inputs.gitlab_project_id != '' || !github.event.repository.fork" in jobs['start']['if']
 assert jobs['wait']['needs'] == 'start'
 assert jobs['collect']['needs'] == 'wait'
 
 def job_runs(name, event, attempt, context='', start_result='skipped', canceled=False,
-             ref='refs/heads/main', default='main'):
+             ref='refs/heads/main', default='main', project='42', fork=False):
     expression = jobs[name]['if'].replace("format('refs/heads/{0}', github.event.repository.default_branch)",
                                           repr(f'refs/heads/{default}'))
-    for key, value in {'github.event_name': event, 'github.run_attempt': attempt, 'github.ref': ref,
+    for key, value in {'github.event.repository.fork': fork, 'inputs.gitlab_project_id': project,
+                       'github.event_name': event, 'github.run_attempt': attempt, 'github.ref': ref,
                        '(inputs.context_run_id || github.event.inputs.context_run_id)': context, 'needs.start.result': start_result,
                        'cancelled()': canceled}.items():
         expression = expression.replace(key, repr(value))
@@ -138,16 +138,19 @@ def test_retries_monitor_saved_context_without_starting_pipelines():
         assert not job_runs('start', event, 1, context='900')
         assert job_runs('wait', event, 1, context='900')
         assert not job_runs('wait', event, 2, canceled=True)
+    # Unsupported events start the job, its authorization step then fails with a message.
     for event in ('pull_request', 'pull_request_target'):
+        assert job_runs('start', event, 1)
         for attempt in (1, 2):
-            assert not job_runs('start', event, attempt)
             assert not job_runs('wait', event, attempt)
     for ref in ('refs/heads/feature', 'refs/tags/main'):
+        assert job_runs('start', 'push', 1, ref=ref)
         for attempt in (1, 2):
-            assert not job_runs('start', 'push', attempt, ref=ref)
             assert not job_runs('wait', 'push', attempt, ref=ref)
-    assert job_runs('start', 'push', 1, ref='refs/heads/trunk', default='trunk')
-    assert not job_runs('start', 'push', 1, ref='refs/heads/main', default='trunk')
+    # Forks without a GitLab project skip the run, a missing project elsewhere fails in validation.
+    assert not job_runs('start', 'push', 1, project='', fork=True)
+    assert job_runs('start', 'push', 1, project='', fork=False)
+    assert job_runs('start', 'push', 1, project='42', fork=True)
 
 
 test_retries_monitor_saved_context_without_starting_pipelines()
@@ -168,6 +171,7 @@ assert any(line.startswith('requests==') for line in requirements)
 assert 'env' not in prepare
 token_scopes = {
     'Authorize the run': {'GH_TOKEN'},
+    'Check continuation': {'GH_TOKEN'},
     'Comment on the PR': {'GH_TOKEN'},
     'Validate configuration': {'GITLAB_TOKEN', 'GITLAB_TRIGGER_TOKEN'},
     'Push the selected commit to GitLab': {'GITLAB_TOKEN'},
@@ -339,6 +343,12 @@ elif '/collaborators/' in endpoint:
     value = {'permission': permissions[login]}
 elif '/issues/comments/' in endpoint:
     value = json.loads(os.environ['MOCK_COMMENT'])
+elif '/contents/' in endpoint:
+    if 'MOCK_CALLER' not in os.environ:
+        print('gh: Not Found (HTTP 404)', file=sys.stderr)
+        sys.exit(1)
+    import base64
+    value = {'content': base64.b64encode(os.environ['MOCK_CALLER'].encode()).decode()}
 elif '/attempts/' in endpoint and '/jobs' in endpoint:
     value = json.loads(os.environ['MOCK_JOBS'])
 elif '/actions/runs/' in endpoint:
@@ -366,7 +376,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     gh_log = fixture / 'gh.jsonl'
     origin = {'id': 900, 'repository': {'full_name': 'example/project'},
               'head_repository': {'full_name': 'example/project'},
-              'workflow_id': 88, 'head_sha': 'a' * 40, 'head_branch': 'main',
+              'workflow_id': 88, 'head_sha': 'a' * 40, 'head_branch': 'main', 'path': '.github/workflows/hpc.yml',
               'event': 'workflow_dispatch'}
     pr = {'state': 'open', 'head': {'sha': 'a' * 40},
           'base': {'repo': {'full_name': 'example/project'}}}
@@ -482,7 +492,11 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
             result = run(authorize, base | overrides)
             assert result.returncode != 0, (overrides, result.stdout)
         run(authorize, base | {'EVENT': 'push'})
-        assert not gh_log.read_text()
+        assert [json.loads(line)[:2] for line in gh_log.read_text().splitlines()] == [['api', 'repos/example/project']]
+        for overrides in ({'EVENT': 'pull_request'}, {'EVENT': 'push', 'GITHUB_REF': 'refs/heads/feature'},
+                          {'EVENT': 'push', 'GITHUB_REF': 'refs/tags/main'}):
+            result = run(authorize, base | overrides)
+            assert result.returncode != 0 and 'runs on pushes to main' in result.stdout, (overrides, result.stdout)
 
     test_only_repository_writers_authorize_prs_and_other_branches()
 
@@ -568,6 +582,20 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
             assert result.returncode != 0 and message in result.stdout, (overrides, result.stdout)
 
     test_configuration_errors_name_the_input_to_fix()
+
+    def test_continuation_problems_are_reported_at_start():
+        check = by_name['Check continuation']['run']
+        good = 'on:\n  workflow_dispatch:\n    inputs:\n      context_run_id:\n        type: string\n'
+        for overrides, warning in [({'MOCK_CALLER': good}, None), ({}, 'is missing on main'),
+                                   ({'MOCK_CALLER': 'on:\n  workflow_dispatch:\n'}, 'lacks the workflow_dispatch input'),
+                                   ({'MOCK_CALLER': 'on:\n  push:\n'}, 'lacks the workflow_dispatch input')]:
+            result = run(check, overrides)
+            assert result.returncode == 0, (overrides, result.stdout, result.stderr)
+            assert ('::warning::' in result.stdout) == bool(warning) and (not warning or warning in result.stdout), result.stdout
+        calls = [json.loads(line) for line in gh_log.read_text().splitlines()]
+        assert any(call[1] == 'repos/example/project/contents/.github/workflows/hpc.yml?ref=main' for call in calls)
+
+    test_continuation_problems_are_reported_at_start()
 
     def test_runs_failing_before_collection_are_reported_to_the_pr():
         failure = jobs['failure']

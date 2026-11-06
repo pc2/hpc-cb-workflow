@@ -30,7 +30,6 @@ permissions:
 
 jobs:
   hpc:
-    if: vars.GITLAB_PROJECT_ID != ''
     uses: pc2/hpc-cb-workflow/.github/workflows/hpc-pipeline.yml@REVIEWED_COMMIT
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}

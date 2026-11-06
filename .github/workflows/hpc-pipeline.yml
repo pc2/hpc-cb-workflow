@@ -78,10 +78,10 @@ env:
 jobs:
   start:
     name: Start on GitLab
+    # Forks without a configured GitLab project skip the whole run, unsupported events fail in Authorize the run.
     if: >-
-      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
-      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) &&
-      (inputs.context_run_id || github.event.inputs.context_run_id) == '' && github.run_attempt == 1
+      (inputs.context_run_id || github.event.inputs.context_run_id) == '' && github.run_attempt == 1 &&
+      (inputs.gitlab_project_id != '' || !github.event.repository.fork)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -121,12 +121,16 @@ jobs:
             permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$1/permission" --jq .permission) || return 1
             [[ $permission == write || $permission == admin ]]
           }
-          if [[ $EVENT != workflow_dispatch ]]; then
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          [[ -n $default_branch ]]
+          if [[ $EVENT == schedule || ( $EVENT == push && $GITHUB_REF == "refs/heads/$default_branch" ) ]]; then
             echo "Started by $EVENT on the default branch."
             exit 0
           fi
-          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
-          [[ -n $default_branch ]]
+          if [[ $EVENT != workflow_dispatch ]]; then
+            echo "::error::The workflow runs on pushes to $default_branch, schedules and dispatches, not on $EVENT for $GITHUB_REF."
+            exit 1
+          fi
           if [[ -z $PR && -z $COMMENT && $GITHUB_REF == "refs/heads/$default_branch" ]]; then
             echo "Started on the default branch $default_branch."
             exit 0
@@ -190,6 +194,21 @@ jobs:
             fail 'benchmark must be a JSON object whose suites, if given, form an array.'
           [[ $EXPECTED_PIPELINE_STATUS == success || $EXPECTED_PIPELINE_STATUS == failed ]] ||
             fail "expected_pipeline_status must be success or failed, not '$EXPECTED_PIPELINE_STATUS'."
+      # Continuation dispatches the caller on the default branch, a missing caller or input surfaces only after max_wait_minutes.
+      - name: Check continuation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          path=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .path)
+          path=${path%%@*}
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          if ! caller=$(gh api "repos/$GITHUB_REPOSITORY/contents/$path?ref=$default_branch" --jq .content 2> /dev/null | base64 -d); then
+            echo "::warning::$path is missing on $default_branch, monitoring longer than max_wait_minutes cannot continue in another run."
+          elif ! grep -q 'workflow_dispatch' <<< "$caller" || ! grep -Eq '^[[:space:]]+context_run_id:' <<< "$caller"; then
+            echo "::warning::$path on $default_branch lacks the workflow_dispatch input context_run_id, monitoring longer than max_wait_minutes cannot continue in another run."
+          fi
       # The GitLab workflow rule compares EXPECTED_COMMIT_SHA with the mirrored commit, so callers cannot get it wrong.
       - name: Compose pipeline variables
         id: variables

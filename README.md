@@ -119,6 +119,8 @@ Jobs of child pipelines in the same project appear as `<trigger job>/<job>`.
 GitLab outages up to thirty minutes are retried, an outage reaching `max_wait_minutes` hands over to the next run.
 After `max_wait_minutes` it dispatches the caller on the default branch again with `context_run_id`, so monitoring may outlast the six hour job limit.
 Continuation stops after seven days, the summary names the original run ID for a manual resume.
+The start job warns when the caller or its `context_run_id` input is missing on the default branch, continuation would fail there.
+Forks without `gitlab_project_id` skip the run, unsupported events such as `pull_request` fail with a message.
 A pipeline blocked by a manual job ends the monitoring with status `manual` and fails the run.
 Optional manual jobs do not block.
 Collect uploads the GitLab artifacts with a thirty day retention and posts one PR comment per pipeline.
