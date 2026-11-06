@@ -48,8 +48,6 @@ assert set(caller['on']['workflow_dispatch']['inputs']) == {'context_run_id', 'p
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
     assert forwarded['command_comment'] == '${{ inputs.command_comment }}', example
-    assert forwarded['authorized_roles'] == "${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}", example
-assert workflow['on']['workflow_call']['inputs']['authorized_roles']['default'] == 'admin maintain'
 assert caller['jobs']['hpc']['if'] == "vars.GITLAB_PROJECT_ID != ''"
 assert caller['jobs']['hpc']['uses'].endswith('@REVIEWED_COMMIT')
 assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['required'] == 'false'
@@ -321,12 +319,12 @@ if method != 'GET':
 if endpoint == f"repos/{os.environ['GITHUB_REPOSITORY']}":
     value = {'default_branch': os.environ['MOCK_DEFAULT_BRANCH']}
 elif '/collaborators/' in endpoint:
-    roles = json.loads(os.environ.get('MOCK_ROLES', '{}'))
+    permissions = json.loads(os.environ.get('MOCK_PERMISSIONS', '{}'))
     login = endpoint.split('/collaborators/')[1].split('/')[0]
-    if login not in roles:
+    if login not in permissions:
         print('gh: Not Found (HTTP 404)', file=sys.stderr)
         sys.exit(1)
-    value = {'role_name': roles[login]}
+    value = {'permission': permissions[login]}
 elif '/issues/comments/' in endpoint:
     value = json.loads(os.environ['MOCK_COMMENT'])
 elif '/actions/runs/' in endpoint:
@@ -421,26 +419,32 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     assert result.returncode != 0
     assert not marker.exists()
 
-    def test_only_authorized_people_start_runs_outside_the_default_branch():
+    def test_only_repository_writers_authorize_prs_and_other_branches():
         authorize = by_name['Authorize the run']['run']
         sha = 'a' * 40
-        base = {'ROLES': 'admin maintain', 'EVENT': 'workflow_dispatch', 'ACTOR': 'maintainer', 'PR': '7',
+        base = {'EVENT': 'workflow_dispatch', 'ACTOR': 'maintainer', 'PR': '7',
                 'COMMENT': '', 'SELECTED_SHA': sha, 'GITHUB_API_URL': 'https://api.github.com',
-                'MOCK_ROLES': json.dumps({'maintainer': 'maintain', 'owner': 'admin', 'writer': 'write'})}
+                'MOCK_PERMISSIONS': json.dumps({'maintainer': 'write', 'owner': 'admin', 'writer': 'write',
+                                                'reader': 'read', 'triager': 'read', 'outsider': 'none',
+                                                'missing': None})}
         def comment(body, author='maintainer', issue=7):
             return {'COMMENT': '99', 'ACTOR': 'github-actions[bot]', 'MOCK_COMMENT': json.dumps(
                 {'body': body, 'user': {'login': author},
                  'issue_url': f'https://api.github.com/repos/example/project/issues/{issue}'})}
         accepted = [{'EVENT': 'push', 'ACTOR': 'anyone'}, {'EVENT': 'schedule', 'ACTOR': 'anyone'},
                     {'PR': '', 'ACTOR': 'github-actions[bot]'}, {'ACTOR': 'maintainer'}, {'ACTOR': 'owner'},
+                    {'ACTOR': 'writer'}, {'PR': '', 'ACTOR': 'writer', 'GITHUB_REF': 'refs/heads/feature'},
+                    comment(f'/hpc {sha[:7]}', author='writer'),
                     comment(f'/hpc {sha[:7]}'), comment(f'/hpc {"b" * 7} {sha} checks=gpu'),
                     comment(f'/hpc\n{sha[:12]}\n', author='owner')]
-        refused = [{'ACTOR': 'writer'}, {'ACTOR': 'stranger'}, {'ACTOR': 'github-actions[bot]'},
-                   {'PR': '', 'ACTOR': 'writer', 'GITHUB_REF': 'refs/heads/feature'},
-                   comment(f'/hpc {sha[:7]}', author='writer'), comment(f'/hpc {"b" * 7}'),
+        refused = [{'ACTOR': 'stranger'}, {'ACTOR': 'github-actions[bot]'},
+                   comment(f'/hpc {"b" * 7}'),
                    comment(f'/hpc {sha[:7]}', issue=8), comment(f'please /hpc {sha[:7]}'),
-                   comment(f'/hpc {sha[:6]}'), comment(f'/hpc checks={sha[:7]}'),
-                   {'ROLES': 'admin; true', 'ACTOR': 'maintainer'}]
+                   comment(f'/hpc {sha[:6]}'), comment(f'/hpc checks={sha[:7]}')]
+        for actor in ('reader', 'triager', 'outsider', 'missing', 'stranger'):
+            refused += [{'ACTOR': actor},
+                        {'PR': '', 'ACTOR': actor, 'GITHUB_REF': 'refs/heads/feature'},
+                        comment(f'/hpc {sha[:7]}', author=actor)]
         for overrides in accepted:
             result = run(authorize, base | overrides)
             assert result.returncode == 0, (overrides, result.stdout, result.stderr)
@@ -450,7 +454,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         run(authorize, base | {'EVENT': 'push'})
         assert not gh_log.read_text()
 
-    test_only_authorized_people_start_runs_outside_the_default_branch()
+    test_only_repository_writers_authorize_prs_and_other_branches()
 
     validate = by_name['Validate configuration']['run']
     assert run(validate).returncode == 0

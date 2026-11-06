@@ -15,7 +15,7 @@ Pages are redeployed after a failing suite, since its point is already recorded.
 A failed benchmark action can no longer report an earlier measurement of the same commit.
 The `/hpc <commit> [<commit> ...]` command dispatches the named reviewed commits of the PR, earlier commits included.
 Command options `name=value` set the caller's dispatch inputs, the PR command test verifies a refused and an accepted option.
-The start job authorizes PR runs and runs of other branches through the `authorized_roles` of the person or the command comment.
+The command and start job require repository write access for the person authorizing PR runs and runs of other branches.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.
 GitLab outages are retried during monitoring and continuation dispatches are retried.
 Checks and collected artifacts include all jobs and child pipelines.

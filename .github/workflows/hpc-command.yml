@@ -19,7 +19,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CB_TEST_ACTOR: ${{ vars.CB_TEST_ACTOR }}
-          CB_COMMAND_ROLES: ${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}
           CB_COMMAND_WORKFLOW: ${{ vars.CB_COMMAND_WORKFLOW || 'hpc-pr.yml' }}
         run: |
           python3 - <<'PY'
@@ -112,15 +111,14 @@ jobs:
               pr = api(f'repos/{repo}/pulls/{number}')
               if pr['state'] != 'open':
                   raise ValueError('The PR is not open.')
+              permission = api(f'repos/{repo}/collaborators/{login}/permission').get('permission')
+              if permission not in ('write', 'admin'):
+                  raise ValueError('The commenter needs repository write access to authorize cluster execution.')
               test = authorized_test_pr(pr, login, os.environ.get('CB_TEST_ACTOR', ''), repo)
               if test:
                   files = api(f'repos/{repo}/pulls/{number}/files?per_page=100')
                   if len(files) != 1 or files[0]['filename'] != 'benchmarks/pr-fixture.json':
                       raise ValueError('The integration PR changed files outside its fixture.')
-              else:
-                  role = api(f'repos/{repo}/collaborators/{login}/permission')['role_name']
-                  if role not in os.environ.get('CB_COMMAND_ROLES', 'admin maintain').split():
-                      raise ValueError('The commenter cannot authorize cluster execution.')
               # The comment names the reviewed commits, the PR may have received others since the review.
               commits = pr_commits(repo, number)
               if not all(re.fullmatch(r'[0-9a-f]{40}', sha) for sha in commits + [pr['head']['sha']]):

@@ -39,7 +39,6 @@ jobs:
       pull_request: ${{ inputs.pull_request }}
       source_sha: ${{ inputs.source_sha }}
       command_comment: ${{ inputs.command_comment }}
-      authorized_roles: ${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}
       pipeline_variables: EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}

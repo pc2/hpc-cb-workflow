@@ -19,7 +19,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CB_TEST_ACTOR: ${{ vars.CB_TEST_ACTOR }}
-          CB_COMMAND_ROLES: ${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}
           CB_COMMAND_WORKFLOW: ${{ vars.CB_COMMAND_WORKFLOW || 'hpc-pr.yml' }}
         run: |
           python3 - <<'PY'

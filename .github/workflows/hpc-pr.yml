@@ -43,7 +43,6 @@ jobs:
       pull_request: ${{ inputs.pull_request }}
       source_sha: ${{ inputs.source_sha }}
       command_comment: ${{ inputs.command_comment }}
-      authorized_roles: ${{ vars.CB_COMMAND_ROLES || 'admin maintain' }}
       context_run_id: ${{ inputs.context_run_id }}
       max_wait_minutes: ${{ inputs.source_sha != '' && inputs.context_run_id == '' && '1' || '330' }}
       pipeline_variables: |
