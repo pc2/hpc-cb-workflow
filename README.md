@@ -101,7 +101,7 @@ workflow:
 | `pipeline_variables` | Pipeline variables, one `KEY=VALUE` per line. |
 | `context_run_id` | The original GitHub run, used to resume monitoring. |
 | `pull_request` | An optional PR whose head is the selected commit. |
-| `source_sha` | A reviewed PR head commit, verified against `pull_request`. |
+| `source_sha` | A reviewed commit of the PR, verified against `pull_request`. |
 | `benchmark` | Benchmark publication configuration as JSON, see below. |
 | `expected_pipeline_status` | The required terminal status, `success` by default, `failed` for deliberate failure tests. |
 | `max_wait_minutes` | Minutes one run monitors before continuing in another run, at most 330. |
@@ -126,7 +126,7 @@ A pipeline without artifacts passes, the summary reports the number of collected
 `expire_in` must outlast the queue time of the following jobs, since collection starts after the whole pipeline.
 
 Only pushes to the default branch, manual dispatch and schedules run the workflow, so maintainers authorize every commit before it reaches the cluster.
-Pass `source_sha` and `pull_request` to run a reviewed PR head, including a fork commit, from the caller on the default branch.
+Pass `source_sha` and `pull_request` to run a reviewed commit of an open PR, including a fork commit, from the caller on the default branch.
 PR runs use the GitLab branch `hpc-pr-<number>-<sha>`, these branches remain on GitLab until pruned.
 Jobs run with the CI account's filesystem and scheduler permissions, there is no sandbox.
 GitLab tokens reach only the steps that use them, collected archives are stored without extraction.
@@ -172,12 +172,15 @@ For an existing documentation site, use `history` and copy the directory from th
 
 ## PR command
 
-Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment `/hpc <commit>`.
-The commit is the reviewed PR head, at least seven hex characters.
-It verifies the commenter's role, `admin maintain` by default in `CB_COMMAND_ROLES`, and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default.
-If the PR head differs from the named commit, nothing is dispatched, so a push after the review cannot reach the cluster.
-The reply names the authorized commit or the reason for refusing, later pushes require another comment.
-Results appear as check runs on that commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
+Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment `/hpc <commit> [<commit> ...]`.
+Each commit is named by at least seven hex characters and must belong to the PR.
+It verifies the commenter's role, `admin maintain` by default in `CB_COMMAND_ROLES`, and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default, once per commit.
+Only named commits run, so a push after the review cannot reach the cluster.
+Earlier commits of the PR can run as well, for example to locate a benchmark regression.
+If any named commit is unknown or ambiguous, nothing is dispatched.
+The reply names the authorized commits or the reasons for refusing.
+Results appear as check runs on each commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
+GitHub shows checks of earlier commits on the commit pages, not in the PR view.
 The same run can be dispatched by hand with `pull_request` and `source_sha`.
 Leave `CB_TEST_ACTOR` unset outside this repository.
 

@@ -106,8 +106,10 @@ jobs:
           set -euo pipefail
           [[ $SELECTED_SHA =~ ^[0-9a-f]{40}$ ]]
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" |
-            jq -e --arg sha "$SELECTED_SHA" --arg repo "$GITHUB_REPOSITORY" \
-              '.state == "open" and .head.sha == $sha and .base.repo.full_name == $repo'
+            jq -e --arg repo "$GITHUB_REPOSITORY" '.state == "open" and .base.repo.full_name == $repo'
+          # Any commit of the PR may run, not only its head, so earlier commits can be compared.
+          commits=$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR/commits" --jq '.[].sha')
+          grep -Fqx "$SELECTED_SHA" <<< "$commits"
       - name: Check out the selected commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # Use version 7.0.1.
         with:

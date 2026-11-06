@@ -23,6 +23,35 @@ def authorized_test_pr(pr, login, expected_login, repo):
                 pr['title'].startswith('HPC integration test '))
 
 
+def pr_commits(repo, number):
+    commits = []
+    # GitHub lists at most 250 commits of a PR.
+    for page in (1, 2, 3):
+        chunk = api(f'repos/{repo}/pulls/{number}/commits?per_page=100&page={page}')
+        commits += [commit['sha'] for commit in chunk]
+        if len(chunk) < 100:
+            break
+    return commits
+
+
+def select_commits(body, commits, head):
+    """Returns the PR commits named in the command and the reasons for refusing the command."""
+    names = body.split()[1:]
+    if not names:
+        return [], ['Name the reviewed commits, for example `/hpc ' + head[:12] + '`.']
+    selected, reasons = [], []
+    for name in names:
+        if not re.fullmatch(r'[0-9a-f]{7,40}', name):
+            reasons.append('Commits are named by at least seven hex characters of their hash.')
+            continue
+        matches = [sha for sha in commits if sha.startswith(name)]
+        if len(matches) != 1:
+            reasons.append(f'{name} matches {"no commit" if not matches else "several commits"} of this PR.')
+        elif matches[0] not in selected:
+            selected.append(matches[0])
+    return (selected, []) if not reasons else ([], reasons)
+
+
 def main():
     event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
     body = event['comment']['body'].strip()
@@ -44,24 +73,28 @@ def main():
         role = api(f'repos/{repo}/collaborators/{login}/permission')['role_name']
         if role not in os.environ.get('CB_COMMAND_ROLES', 'admin maintain').split():
             raise ValueError('The commenter cannot authorize cluster execution.')
-    sha = pr['head']['sha']
-    if not re.fullmatch(r'[0-9a-f]{40}', sha):
+    # The comment names the reviewed commits, the PR may have received others since the review.
+    commits = pr_commits(repo, number)
+    if not all(re.fullmatch(r'[0-9a-f]{40}', sha) for sha in commits + [pr['head']['sha']]):
         raise ValueError('Invalid PR commit.')
-    # The comment names the reviewed commit, the PR head may have moved since the review.
-    reviewed = re.fullmatch(r'/hpc\s+([0-9a-f]{7,40})', body)
-    if not reviewed or not sha.startswith(reviewed[1]):
-        reason = (f'The PR head is {sha}, which is not the named commit {reviewed[1]}.' if reviewed
-                  else 'Name the reviewed commit, for example `/hpc ' + sha[:12] + '`.')
-        api(f'repos/{repo}/issues/{number}/comments', dict(body=f'{marker}\n\nNot dispatched. {reason}'))
-        raise ValueError(reason)
+    selected, reasons = select_commits(body, commits, pr['head']['sha'])
+    if reasons:
+        api(f'repos/{repo}/issues/{number}/comments',
+            dict(body=f'{marker}\n\nNot dispatched.\n\n' + '\n'.join(f'- {reason}' for reason in reasons)))
+        raise ValueError(' '.join(reasons))
     workflow = os.environ.get('CB_COMMAND_WORKFLOW') or 'hpc-pr.yml'
-    result = api(f'repos/{repo}/actions/workflows/{workflow}/dispatches',
-                 dict(ref=event['repository']['default_branch'],
-                      inputs=dict(pull_request=str(number), source_sha=sha), return_run_details=True))
-    run_id = result['workflow_run_id']
-    api(f'repos/{repo}/issues/{number}/comments',
-        dict(body=f'{marker}\n\nAuthorized commit {sha}.\n[HPC run](https://github.com/{repo}/actions/runs/{run_id}).'))
-
+    lines = []
+    try:
+        for sha in selected:
+            result = api(f'repos/{repo}/actions/workflows/{workflow}/dispatches',
+                         dict(ref=event['repository']['default_branch'],
+                              inputs=dict(pull_request=str(number), source_sha=sha), return_run_details=True))
+            lines.append(f'Authorized commit {sha}.\n[HPC run](https://github.com/{repo}/actions/runs/'
+                         f'{result["workflow_run_id"]}).')
+    finally:
+        # Announce every started run, also when a later dispatch fails.
+        if lines:
+            api(f'repos/{repo}/issues/{number}/comments', dict(body=f'{marker}\n\n' + '\n\n'.join(lines)))
 
 if __name__ == '__main__':
     main()
