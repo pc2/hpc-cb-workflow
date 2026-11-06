@@ -13,7 +13,12 @@ Pushes, manual runs and weekly runs contribute to the benchmark history.
 Publication retries reuse the saved measurement without creating another point.
 Pages are redeployed after a failing suite, since its point is already recorded.
 A failed benchmark action can no longer report an earlier measurement of the same commit.
-The `/hpc` command accepts surrounding whitespace.
+The `/hpc <commit>` command dispatches only when the PR head matches the reviewed commit.
+Pushes to the default branch start pipelines, it no longer has to be named `main`.
+GitLab outages are retried during monitoring and continuation dispatches are retried.
+Checks and collected artifacts include all jobs and child pipelines.
+Pipelines without artifacts pass collection.
+A pipeline blocked by a manual job ends monitoring instead of polling for seven days.
 The manual example accepts `source_sha` and can serve as the PR command target.
 
 The reusable workflow mirrors commits and verifies pipeline identity.

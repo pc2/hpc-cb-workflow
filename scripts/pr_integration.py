@@ -109,7 +109,7 @@ def run(state_path):
                  token=token)['number']
         state[-1]['pr'] = pr
         state_path.write_text(json.dumps(state))
-        comment = api(f'repos/{repo}/issues/{pr}/comments', dict(body='/hpc'),
+        comment = api(f'repos/{repo}/issues/{pr}/comments', dict(body=f'/hpc {commit}'),
                       token=os.environ['CB_TEST_TOKEN'])
         origin = None
         for _ in range(60):

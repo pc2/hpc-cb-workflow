@@ -17,7 +17,7 @@ caller = yaml.load((root / 'examples/manual.yml').read_text(), Loader=yaml.BaseL
 checks = yaml.load((root / '.github/workflows/test.yml').read_text(), Loader=yaml.BaseLoader)
 integration = yaml.load((root / '.github/workflows/integration.yml').read_text(), Loader=yaml.BaseLoader)
 suite = yaml.load((root / '.github/workflows/integration-suite.yml').read_text(), Loader=yaml.BaseLoader)
-weekly = yaml.load((root / '.github/workflows/weekly-benchmark.yml').read_text(), Loader=yaml.BaseLoader)
+history = yaml.load((root / '.github/workflows/benchmark-history.yml').read_text(), Loader=yaml.BaseLoader)
 gitlab_ci = yaml.load((root / '.gitlab-ci.yml').read_text(), Loader=yaml.BaseLoader)
 jobs = workflow['jobs']
 assert set(jobs) == {'start', 'wait', 'collect', 'benchmark', 'pages'}
@@ -28,7 +28,7 @@ action_revisions = {step['uses'].split('@')[1] for step in steps
 assert len(action_revisions) == 1
 action_revision = action_revisions.pop()
 assert subprocess.check_output(['git', '-C', str(action), 'rev-parse', 'HEAD'], text=True).strip() == action_revision
-for definition in (workflow, checks, integration, suite, weekly):
+for definition in (workflow, checks, integration, suite, history):
     for job in definition['jobs'].values():
         for step in job.get('steps', []):
             if 'uses' in step:
@@ -43,7 +43,8 @@ assert set(caller['on']) == {'workflow_dispatch'}
 assert 'workflow_call' in workflow['on']
 assert caller['permissions'] == workflow['permissions']
 assert 'statuses' not in caller['permissions']
-assert caller['jobs']['hpc']['with']['pipeline_variables'] == 'EXPECTED_COMMIT_SHA=${{ github.sha }}'
+assert caller['jobs']['hpc']['with']['pipeline_variables'] == 'EXPECTED_COMMIT_SHA=${{ inputs.source_sha || github.sha }}'
+assert set(caller['on']['workflow_dispatch']['inputs']) == {'context_run_id', 'pull_request', 'source_sha'}
 assert caller['jobs']['hpc']['if'] == "vars.GITLAB_PROJECT_ID != ''"
 assert caller['jobs']['hpc']['uses'].endswith('@REVIEWED_COMMIT')
 assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['required'] == 'false'
@@ -51,6 +52,7 @@ assert workflow['on']['workflow_call']['inputs']['max_wait_minutes']['default'] 
 assert workflow['on']['workflow_call']['inputs']['expected_pipeline_status']['default'] == 'success'
 assert workflow['on']['workflow_call']['outputs']['pipeline_status']['value'] == '${{ jobs.collect.outputs.pipeline_status }}'
 assert jobs['benchmark']['if'].find("needs.collect.outputs.pipeline_status == 'success'") >= 0
+assert "needs.benchmark.result == 'failure'" in jobs['pages']['if'] and "needs.wait.outputs.pull_request == ''" in jobs['pages']['if']
 
 
 def test_integration_suite_covers_all_scenarios_and_verifies_without_write_access():
@@ -85,10 +87,10 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert gitlab_ci['slow']['rules'] == [{'if': '$SCENARIO == "handover" || $SCENARIO == "handover_failure"'}]
     assert gitlab_ci['slow']['artifacts']['when'] == 'always'
     assert gitlab_ci['benchmark']['rules'] == [{'if': '$SCENARIO == "benchmark"'}]
-    assert set(weekly['on']) == {'push', 'schedule', 'workflow_dispatch'}
-    assert weekly['on']['push'] == {'branches': ['main']}
-    assert weekly['jobs']['benchmark']['uses'] == './.github/workflows/hpc-pipeline.yml'
-    assert json.loads(weekly['jobs']['benchmark']['with']['benchmark'])['mode'] == 'pages'
+    assert set(history['on']) == {'push', 'schedule', 'workflow_dispatch'}
+    assert history['on']['push'] == {'branches': ['main']}
+    assert history['jobs']['benchmark']['uses'] == './.github/workflows/hpc-pipeline.yml'
+    assert json.loads(history['jobs']['benchmark']['with']['benchmark'])['mode'] == 'pages'
     assert 'results/' in gitlab_ci['quick']['artifacts']['paths']
 assert jobs['wait']['timeout-minutes'] == '345'
 assert "inputs.context_run_id == ''" in jobs['start']['if']
@@ -99,8 +101,9 @@ assert jobs['wait']['needs'] == 'start'
 assert jobs['collect']['needs'] == 'wait'
 
 def job_runs(name, event, attempt, context='', start_result='skipped', canceled=False,
-             ref='refs/heads/main'):
-    expression = jobs[name]['if']
+             ref='refs/heads/main', default='main'):
+    expression = jobs[name]['if'].replace("format('refs/heads/{0}', github.event.repository.default_branch)",
+                                          repr(f'refs/heads/{default}'))
     for key, value in {'github.event_name': event, 'github.run_attempt': attempt, 'github.ref': ref,
                        'inputs.context_run_id': context, 'needs.start.result': start_result,
                        'cancelled()': canceled}.items():
@@ -129,6 +132,8 @@ def test_retries_monitor_saved_context_without_starting_pipelines():
         for attempt in (1, 2):
             assert not job_runs('start', 'push', attempt, ref=ref)
             assert not job_runs('wait', 'push', attempt, ref=ref)
+    assert job_runs('start', 'push', 1, ref='refs/heads/trunk', default='trunk')
+    assert not job_runs('start', 'push', 1, ref='refs/heads/main', default='trunk')
 
 
 test_retries_monitor_saved_context_without_starting_pipelines()
@@ -172,6 +177,8 @@ assert by_name['Store pipeline context']['with']['name'] == 'hpc-context'
 assert 'overwrite' not in by_name['Store pipeline context']['with']
 assert by_name['Download pipeline context']['with']['run-id'] == '${{ env.CONTEXT_RUN_ID }}'
 assert by_name['Upload GitLab artifacts']['with']['overwrite'] == 'true'
+assert by_name['Upload GitLab artifacts']['with']['if-no-files-found'] == 'warn'
+assert by_name['Store pipeline context']['with']['if-no-files-found'] == 'error'
 assert jobs['collect']['env']['PR'] == '${{ needs.wait.outputs.pull_request }}'
 assert "always()" in by_name['Upload GitLab artifacts']['if']
 assert "always()" in by_name['Report to the PR']['if']
@@ -183,6 +190,7 @@ assert by_name['Collect GitLab artifacts']['env']['PIPELINE_ID'] == '${{ env.PIP
 assert by_name['Follow GitLab jobs']['env']['TARGET_SHA'] == '${{ steps.identity.outputs.sha }}'
 assert 'steps.identity.outputs.pipeline_id' in by_name['Follow GitLab jobs']['env']['CHECK_PREFIX']
 assert by_name['Follow GitLab jobs']['env']['SET_STATUS'] == 'false'
+assert by_name['Follow GitLab jobs']['env']['STOP_ON_MANUAL'] == 'true'
 checkout = by_name['Check out the selected commit']
 mirror = by_name['Push the selected commit to GitLab']
 assert checkout in jobs['start']['steps'] and mirror in jobs['start']['steps']
@@ -206,6 +214,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from urllib.parse import parse_qs, urlparse
 args = sys.argv[1:]
 url = args[-1]
 method = args[args.index('--request') + 1] if '--request' in args else 'GET'
@@ -223,18 +232,33 @@ if url.endswith('/trigger/pipeline'):
     print(Path(os.environ['PIPELINE_RESPONSE']).read_text())
 elif '/repository/commits/' in url:
     print('{}')
-elif '/pipelines/' in url and '/jobs?' not in url:
+elif '/pipelines/' in url and '/jobs?' not in url and '/bridges?' not in url:
     count_file = Path(os.environ['PIPELINE_READ_COUNT'])
     count = int(count_file.read_text()) if count_file.exists() else 0
     count_file.write_text(str(count + 1))
+    if 0 < count <= int(os.environ.get('MOCK_POLL_FAILURES', '0')):
+        print('curl: (22) The requested URL returned error: 502', file=sys.stderr)
+        sys.exit(22)
     if count and 'MOCK_POLL_RESPONSE' in os.environ:
         print(os.environ['MOCK_POLL_RESPONSE'])
         sys.exit(int(os.environ.get('MOCK_POLL_EXIT', '0')))
     print(Path(os.environ['PIPELINE_RESPONSE']).read_text())
+elif '/bridges?' in url:
+    page = int(parse_qs(urlparse(url).query).get('page', ['1'])[0])
+    parent = '/pipelines/123/' in url
+    bridges = [{'name': 'child', 'downstream_pipeline': {'id': 456, 'project_id': 42}},
+               {'name': 'other', 'downstream_pipeline': {'id': 789, 'project_id': 7}}]
+    print(json.dumps(bridges if parent and page == 1 and os.environ.get('MOCK_CHILD') == 'true' else []))
 elif '/jobs?' in url:
-    print(json.dumps([{'id': 1, 'name': 'tests', 'status': os.environ['MOCK_STATUS'],
-        'allow_failure': os.environ.get('MOCK_ALLOW_FAILURE') == 'true',
-        'stage': 'check', 'web_url': 'https://git.example/jobs/1', 'duration': 60}]))
+    page = int(parse_qs(urlparse(url).query).get('page', ['1'])[0])
+    names = ['tests'] + [f'matrix {index}' for index in range(1, int(os.environ.get('MOCK_JOB_COUNT', '1')))]
+    if '/pipelines/456/' in url:
+        names = ['tests']
+    jobs = [{'id': index + 1, 'name': name, 'status': os.environ['MOCK_STATUS'],
+             'allow_failure': os.environ.get('MOCK_ALLOW_FAILURE') == 'true',
+             'stage': 'check', 'web_url': f'https://git.example/jobs/{index + 1}', 'duration': 60}
+            for index, name in enumerate(names)]
+    print(json.dumps(jobs[(page - 1) * 100:page * 100]))
 elif '/check-runs' in url and method == 'GET':
     print(json.dumps({'check_runs': [{'id': 999, 'name': 'gitlab/42/other/tests'}]}))
 elif '/check-runs' in url:
@@ -278,6 +302,9 @@ args = sys.argv[1:]
 with open(os.environ['GH_REQUEST_LOG'], 'a') as log:
     log.write(json.dumps(args) + '\\n')
 if args[:2] == ['workflow', 'run']:
+    dispatches = sum(json.loads(line)[:2] == ['workflow', 'run'] for line in Path(os.environ['GH_REQUEST_LOG']).read_text().splitlines())
+    if dispatches <= int(os.environ.get('MOCK_DISPATCH_FAILURES', '0')):
+        sys.exit(1)
     sys.exit(int(os.environ.get('MOCK_DISPATCH_EXIT', '0')))
 assert args[0] == 'api', args
 endpoint = next(arg for arg in args if arg.startswith('repos/'))
@@ -414,6 +441,9 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     assert run(verify_origin, monitoring).returncode == 0
     origin_file.write_text(json.dumps(origin | {'event': 'push', 'head_branch': 'feature'}))
     assert run(verify_origin, monitoring).returncode != 0
+    origin_file.write_text(json.dumps(origin | {'event': 'push', 'head_branch': 'trunk'}))
+    assert run(verify_origin, monitoring | {'MOCK_DEFAULT_BRANCH': 'trunk'}).returncode == 0
+    assert run(verify_origin, monitoring).returncode != 0
     origin_file.write_text(json.dumps(origin))
     for minutes in ('0', '331', 'bad', ''):
         assert run(verify_origin, {'MAX_WAIT_MINUTES': minutes}).returncode != 0, minutes
@@ -483,6 +513,16 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
     assert run(resume, {'MOCK_DEFAULT_BRANCH': ''}).returncode != 0
     assert not any(call[0] == 'workflow' for call in map(json.loads, gh_log.read_text().splitlines()))
     assert run(resume, {'MOCK_DISPATCH_EXIT': '1'}).returncode != 0
+    assert sum(call[:2] == ['workflow', 'run'] for call in map(json.loads, gh_log.read_text().splitlines())) == 5
+
+    def test_continuation_dispatch_survives_transient_api_errors():
+        result = run(resume, {'MOCK_DISPATCH_FAILURES': '2'})
+        assert result.returncode == 0, result.stdout
+        calls = [json.loads(line) for line in gh_log.read_text().splitlines()]
+        assert sum(call[:2] == ['workflow', 'run'] for call in calls) == 3
+        assert 'continue monitoring' in summary.read_text()
+
+    test_continuation_dispatch_survives_transient_api_errors()
     (fixture / 'date').write_text('604800')
     assert run(resume).returncode != 0
     assert not any(call[0] == 'workflow' for call in map(json.loads, gh_log.read_text().splitlines()))
@@ -490,6 +530,9 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
 
     completed = by_name['Verify completed pipeline']['run']
     assert run(completed, {'GITHUB_REF_NAME': 'other'}).returncode == 0
+    pipeline['status'] = 'manual'
+    assert run(completed).returncode == 0 and 'status=manual' in output.read_text()
+    pipeline['status'] = 'success'
     for key, value in [('status', 'running'), ('sha', 'b' * 40),
                        ('project_id', 1), ('id', 124), ('ref', 'other'), ('source', 'push')]:
         original = pipeline[key]
@@ -525,13 +568,18 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
 
     final = by_name['Set final result']['run']
     assert run(final).returncode == 0
-    for overrides in ({'STATUS': 'failed'}, {'STATUS': 'canceled'},
+    assert 'Collected 0 GitLab job archives.' in summary.read_text()
+    (fixture / 'hpc-artifacts').mkdir(exist_ok=True)
+    (fixture / 'hpc-artifacts' / 'tests.zip').write_bytes(b'zip')
+    assert run(final).returncode == 0
+    assert 'Collected 1 GitLab job archives.' in summary.read_text()
+    for overrides in ({'STATUS': 'failed'}, {'STATUS': 'canceled'}, {'STATUS': 'manual'},
                       {'DOWNLOAD_OUTCOME': 'failure'}, {'UPLOAD_OUTCOME': 'failure'}):
         assert run(final, overrides).returncode != 0, overrides
     def test_expected_failure_does_not_hide_artifact_errors_or_unexpected_success():
         expected_failure = {'STATUS': 'failed', 'EXPECTED_PIPELINE_STATUS': 'failed'}
         assert run(final, expected_failure).returncode == 0
-        for override in ({'STATUS': 'success'}, {'STATUS': 'canceled'}, {'STATUS': 'skipped'},
+        for override in ({'STATUS': 'success'}, {'STATUS': 'canceled'}, {'STATUS': 'skipped'}, {'STATUS': 'manual'},
                          {'DOWNLOAD_OUTCOME': 'failure'}, {'UPLOAD_OUTCOME': 'failure'},
                          {'EXPECTED_PIPELINE_STATUS': 'canceled'}):
             assert run(final, expected_failure | override).returncode != 0, override
@@ -675,6 +723,124 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         assert result.returncode != 0
         assert 'finished=true' not in output.read_text()
 
+    def test_monitoring_survives_a_gitlab_outage_and_hands_over_at_the_deadline():
+        pipeline['status'] = 'pending'
+        response = json.dumps(pipeline | {'status': 'success'})
+        result = run(poll, {'MOCK_STATUS': 'success', 'MOCK_POLL_RESPONSE': response, 'MOCK_POLL_FAILURES': '3'})
+        assert result.returncode == 0, (result.stderr, result.stdout)
+        assert 'finished=true' in output.read_text() and 'status=success' in output.read_text()
+        assert 'retrying' in result.stdout
+        result = run(poll, {'MOCK_STATUS': 'pending', 'MOCK_POLL_RESPONSE': response,
+                            'MOCK_POLL_FAILURES': '1000', 'MAX_WAIT_MINUTES': '30'})
+        assert result.returncode == 0, (result.stderr, result.stdout)
+        assert 'finished=false' in output.read_text()
+        result = run(poll, {'MOCK_STATUS': 'pending', 'MOCK_POLL_RESPONSE': response,
+                            'MOCK_POLL_FAILURES': '1000', 'MAX_WAIT_MINUTES': '0'})
+        assert result.returncode != 0
+        assert 'finished=' not in output.read_text()
+        assert 'for 30 minutes' in result.stdout
+        pipeline['status'] = 'unknown'
+        result = run(poll, {'MOCK_STATUS': 'pending', 'MAX_WAIT_MINUTES': '30'})
+        pipeline['status'] = 'pending'
+        assert result.returncode == 0, (result.stderr, result.stdout)
+        assert 'finished=false' in output.read_text()
+        assert not any('/check-runs' in json.loads(line)['url'] for line in request_log.read_text().splitlines())
+
+    def test_job_checks_cover_all_pages_and_child_pipelines():
+        pipeline['status'] = 'success'
+        result = run(poll, {'MOCK_STATUS': 'success', 'MOCK_JOB_COUNT': '150', 'MOCK_CHILD': 'true'})
+        assert result.returncode == 0, (result.stderr, result.stdout)
+        requests = [json.loads(line) for line in request_log.read_text().splitlines()]
+        names = {r['body']['name'] for r in requests if '/check-runs' in r['url'] and r['method'] != 'GET'}
+        assert len(names) == 152, len(names)
+        assert {'gitlab/42/123/matrix 149', 'gitlab/42/123/child/tests', 'gitlab/42/123/pipeline'} <= names
+        assert not any('/pipelines/789/' in r['url'] for r in requests)
+        assert 'child/tests' in summary.read_text()
+
+    test_monitoring_survives_a_gitlab_outage_and_hands_over_at_the_deadline()
+    test_job_checks_cover_all_pages_and_child_pipelines()
+
+    def test_artifact_collection_covers_all_pages_and_child_pipelines():
+        import importlib.util
+        import types
+
+        class Response:
+            def __init__(self, payload=None, broken=False):
+                self.payload, self.broken = payload, broken
+            def json(self):
+                return self.payload
+            def raise_for_status(self):
+                pass
+            def iter_content(self, chunk_size):
+                yield b'partial'
+                if self.broken:
+                    raise ConnectionError('transfer interrupted')
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        archive = [{'file_type': 'archive', 'file_format': 'zip'}]
+        broken = set()
+        def get(url, headers=None, params=None, stream=False, timeout=None):
+            assert timeout, url
+            page = (params or {}).get('page', 1)
+            if url.endswith('/pipelines/123/jobs'):
+                jobs = [{'id': index, 'name': f'job {index}', 'stage': 'check', 'artifacts': archive} for index in range(150)]
+                return Response(jobs[(page - 1) * 100:page * 100])
+            if url.endswith('/pipelines/456/jobs'):
+                return Response([{'id': 1000, 'name': 'job 0', 'stage': 'check', 'artifacts': archive}] if page == 1 else [])
+            if url.endswith('/pipelines/123/bridges'):
+                return Response([{'name': 'child', 'downstream_pipeline': {'id': 456, 'project_id': 42}},
+                                 {'name': 'other', 'downstream_pipeline': {'id': 789, 'project_id': 7}}] if page == 1 else [])
+            if url.endswith('/bridges'):
+                return Response([])
+            assert url.endswith('/artifacts') and stream, url
+            return Response(broken=url.split('/')[-2] in broken)
+
+        fake = types.ModuleType('requests')
+        fake.get = get
+        directory = fixture / 'collected'
+        settings = {'GITLAB_HOSTNAME': 'git.example', 'GITLAB_PROJECT_ID': '42', 'GITLAB_TOKEN': 'read-token',
+                    'PIPELINE_ID': '123', 'ARTIFACT_DIR': str(directory)}
+        saved_environment, saved_requests = dict(os.environ), sys.modules.get('requests')
+        os.environ.update(settings)
+        sys.modules['requests'] = fake
+        sys.dont_write_bytecode = True
+        try:
+            spec = importlib.util.spec_from_file_location('get_artifact', action / 'get_artifact.py')
+            collector = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(collector)
+            jobs = collector.get_job_list()
+            assert len(jobs) == 151 and jobs[-1]['name'] == 'child/job 0'
+            collector.download_artifacts(jobs)
+            files = {path.name for path in directory.iterdir()}
+            assert len(files) == 151 and {'job_149.zip', 'child_job_0.zip'} <= files
+            for path in directory.iterdir():
+                path.unlink()
+            broken.add('7')
+            try:
+                collector.download_artifacts(jobs)
+            except ConnectionError:
+                pass
+            else:
+                raise AssertionError('An interrupted transfer must fail the collection.')
+            assert not (directory / 'job_7.zip').exists()
+            try:
+                collector.download_artifacts([jobs[0], jobs[0]])
+            except ValueError as error:
+                assert 'share the artifact name' in str(error)
+            else:
+                raise AssertionError('Colliding artifact names must fail the collection.')
+        finally:
+            os.environ.clear()
+            os.environ.update(saved_environment)
+            if saved_requests is None:
+                sys.modules.pop('requests', None)
+            else:
+                sys.modules['requests'] = saved_requests
+
+    test_artifact_collection_covers_all_pages_and_child_pipelines()
     test_waiting_pipelines_resume_without_completed_checks()
     test_optional_manual_jobs_are_skipped_on_successful_pipelines()
     test_waiting_pipelines_complete_when_the_next_poll_finishes()

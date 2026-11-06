@@ -67,7 +67,7 @@ jobs:
     name: Start on GitLab
     if: >-
       (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')) &&
+      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) &&
       inputs.context_run_id == '' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -115,7 +115,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Push the selected commit to GitLab
-        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
+        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
         env:
           MODE: mirror
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -125,7 +125,7 @@ jobs:
           FORCE_PUSH: 'true'
       - name: Start GitLab pipeline
         id: trigger
-        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
+        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
         env:
           MODE: trigger
           GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
@@ -181,7 +181,7 @@ jobs:
     if: >-
       !cancelled() &&
       (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')) &&
+      (github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch))) &&
       (needs.start.result == 'success' || inputs.context_run_id != '' || github.run_attempt > 1)
     runs-on: ubuntu-latest
     timeout-minutes: 345
@@ -215,12 +215,14 @@ jobs:
           [[ $MAX_WAIT_MINUTES =~ ^[1-9][0-9]*$ && $MAX_WAIT_MINUTES -le 330 ]]
           workflow_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .workflow_id)
           origin=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$CONTEXT_RUN_ID")
-          jq -e --arg repo "$GITHUB_REPOSITORY" \
+          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
+          [[ -n $default_branch ]]
+          jq -e --arg repo "$GITHUB_REPOSITORY" --arg default "$default_branch" \
             --argjson workflow "$workflow_id" \
             '.repository.full_name == $repo and .head_repository.full_name == $repo
               and .workflow_id == $workflow
               and (.event == "workflow_dispatch" or .event == "schedule"
-                or (.event == "push" and .head_branch == "main"))' <<< "$origin"
+                or (.event == "push" and .head_branch == $default))' <<< "$origin"
           printf 'workflow_id=%s\nsha=%s\nref=%s\n' "$workflow_id" \
             "$(jq -r .head_sha <<< "$origin")" "$(jq -r .head_branch <<< "$origin")" >> "$GITHUB_OUTPUT"
       - name: Download pipeline context
@@ -279,7 +281,7 @@ jobs:
       - name: Follow GitLab jobs
         id: poll
         continue-on-error: true
-        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
+        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
         env:
           MODE: get_status
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -293,6 +295,7 @@ jobs:
           LOG_TRACES: 'false'
           MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes }}
           POLL_TIMEOUT: '60'
+          STOP_ON_MANUAL: 'true'
       - name: Verify monitoring result
         shell: bash
         env:
@@ -312,11 +315,19 @@ jobs:
             echo '::error::Automatic monitoring reached seven days, resume manually using the original context run ID.'
             exit 1
           fi
-          default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch)
-          [[ -n $default_branch ]]
-          gh workflow run "$WORKFLOW_ID" --repo "$GITHUB_REPOSITORY" --ref "$default_branch" \
-            --field "context_run_id=$CONTEXT_RUN_ID"
-          echo 'Another GitHub run will continue monitoring the same GitLab pipeline.' >> "$GITHUB_STEP_SUMMARY"
+          # A failed dispatch would leave the pipeline unmonitored, so transient API errors are retried.
+          for attempt in 1 2 3 4 5; do
+            if default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq .default_branch) && [[ -n $default_branch ]] &&
+              gh workflow run "$WORKFLOW_ID" --repo "$GITHUB_REPOSITORY" --ref "$default_branch" \
+                --field "context_run_id=$CONTEXT_RUN_ID"; then
+              echo 'Another GitHub run will continue monitoring the same GitLab pipeline.' >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            echo "Dispatching the continuation failed, attempt $attempt."
+            sleep 60
+          done
+          echo "::error::Continuation could not be dispatched, resume manually with context run ID $CONTEXT_RUN_ID."
+          exit 1
 
   collect:
     name: Collect results
@@ -352,7 +363,7 @@ jobs:
             --argjson project "$GITLAB_PROJECT_ID" --argjson id "$PIPELINE_ID" \
             '.sha == $sha and .ref == $ref and .project_id == $project and .id == $id
               and .source == "trigger"
-              and (.status | IN("success", "failed", "canceled", "skipped"))' <<< "$pipeline"
+              and (.status | IN("success", "failed", "canceled", "skipped", "manual"))' <<< "$pipeline"
           printf 'status=%s\nweb_url=%s\n' "$(jq -r .status <<< "$pipeline")" "$(jq -r .web_url <<< "$pipeline")" >> "$GITHUB_OUTPUT"
       - name: Prepare artifact download
         shell: bash
@@ -376,7 +387,7 @@ jobs:
           echo "$RUNNER_TEMP/github2lab-python/bin" >> "$GITHUB_PATH"
       - name: Collect GitLab artifacts
         id: artifacts
-        uses: pc2/github2lab_action@cc3cddb075ef63762970730859c8061e3121ea68
+        uses: pc2/github2lab_action@721e2ab5ae2bc20d9be30393dbf235179d7e64a5
         env:
           MODE: get_artifact
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
@@ -391,7 +402,7 @@ jobs:
           name: gitlab-${{ inputs.gitlab_project_id }}-${{ env.PIPELINE_ID }}
           path: ${{ runner.temp }}/hpc-artifacts/
           overwrite: true
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
       - name: Report to the PR
         if: always() && steps.identity.outcome == 'success' && env.PR != ''
@@ -432,6 +443,7 @@ jobs:
           set -euo pipefail
           [[ $EXPECTED_PIPELINE_STATUS == success || $EXPECTED_PIPELINE_STATUS == failed ]]
           printf 'GitLab pipeline status %s, expected %s.\n' "$STATUS" "$EXPECTED_PIPELINE_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          printf 'Collected %s GitLab job archives.\n' "$(find "$RUNNER_TEMP/hpc-artifacts" -type f 2> /dev/null | wc -l)" >> "$GITHUB_STEP_SUMMARY"
           [[ $STATUS == "$EXPECTED_PIPELINE_STATUS" && $DOWNLOAD_OUTCOME == success && $UPLOAD_OUTCOME == success ]]
 
   benchmark:
@@ -451,7 +463,7 @@ jobs:
 
   pages:
     needs: [wait, benchmark]
-    if: ${{ !cancelled() && needs.benchmark.result == 'success' && needs.wait.outputs.pull_request == '' && fromJSON(needs.wait.outputs.benchmark).mode == 'pages' }}
+    if: ${{ !cancelled() && (needs.benchmark.result == 'success' || needs.benchmark.result == 'failure') && needs.wait.outputs.pull_request == '' && fromJSON(needs.wait.outputs.benchmark).mode == 'pages' }}
     uses: ./.github/workflows/benchmark-pages.yml
     with:
       branch: ${{ fromJSON(needs.wait.outputs.benchmark).branch || 'hpc-results' }}
