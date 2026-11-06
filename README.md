@@ -21,7 +21,7 @@ GitLab operations use `pc2/github2lab_action`, all action references are pinned 
 
 1. Create a GitLab project with runners matching the job tags in the caller's `.gitlab-ci.yml`.
 2. Create a [project access token][access-token] with the `read_api` and `write_repository` scopes.
-   It must be allowed to force push the mirrored branches, `main` and `hpc-pr-*`, so allow force push for `main` if it is protected.
+   It must be allowed to force push the mirrored branches, the default branch and `hpc-pr-*`, so allow force push for the default branch if it is protected.
    Disable pull mirroring for them.
 3. Create a pipeline trigger token under Settings, CI/CD, Pipeline trigger tokens.
    Cluster authorization may require a trigger token owned by a cluster user.
@@ -84,7 +84,7 @@ jobs:
 ```
 
 The GitLab pipeline must accept only triggers for the mirrored commit, otherwise jobs for another branch head can start.
-Two pushes to `main` within seconds mirror different commits to the same GitLab branch, the rule then fails the older run instead of testing the wrong commit.
+Two pushes to the default branch within seconds mirror different commits to the same GitLab branch, the rule then fails the older run instead of testing the wrong commit.
 
 ```yaml
 workflow:
@@ -113,14 +113,19 @@ The `pipeline_status` output exposes the verified GitLab status after collection
 Start force pushes the selected commit to the same branch on GitLab and triggers one pipeline.
 Only the first attempt of a new run may start a pipeline, reruns reuse the saved context artifact.
 Wait verifies the pipeline identity and mirrors job results as check runs named after the project and pipeline IDs.
+Jobs of child pipelines in the same project appear as `<trigger job>/<job>`.
+GitLab outages up to thirty minutes are retried, an outage reaching `max_wait_minutes` hands over to the next run.
 After `max_wait_minutes` it dispatches the caller on the default branch again with `context_run_id`, so monitoring may outlast the six hour job limit.
 Continuation stops after seven days, the summary names the original run ID for a manual resume.
-A pipeline waiting for a blocking manual job is monitored until that limit, use optional manual jobs only.
+A pipeline blocked by a manual job ends the monitoring with status `manual` and fails the run.
+Optional manual jobs do not block.
 Collect uploads the GitLab artifacts with a thirty day retention and posts one PR comment per pipeline.
-Collection fails when the pipeline fails or artifacts are unavailable, unless `expected_pipeline_status` requires the failure.
-Every pipeline must publish at least one artifact, and `expire_in` must outlast the queue time of the following jobs.
+Child pipeline archives are named `<trigger job>_<job>.zip`.
+Collection fails when the pipeline fails or an artifact download fails, unless `expected_pipeline_status` requires the failure.
+A pipeline without artifacts passes, the summary reports the number of collected archives.
+`expire_in` must outlast the queue time of the following jobs, since collection starts after the whole pipeline.
 
-Only pushes to `main`, manual dispatch and schedules run the workflow, so maintainers authorize every commit before it reaches the cluster.
+Only pushes to the default branch, manual dispatch and schedules run the workflow, so maintainers authorize every commit before it reaches the cluster.
 Pass `source_sha` and `pull_request` to run a reviewed PR head, including a fork commit, from the caller on the default branch.
 PR runs use the GitLab branch `hpc-pr-<number>-<sha>`, these branches remain on GitLab until pruned.
 Jobs run with the CI account's filesystem and scheduler permissions, there is no sandbox.
@@ -155,7 +160,7 @@ Custom formats contain a JSON array of objects with `name`, `unit` and `value`.
 The `julia` format reads the estimates exported by `BenchmarkTools.save`.
 The first recording fixes the measurement names and units of a suite, a changed set needs a new suite name.
 The action compares against the latest recorded result of the suite from a different commit, it does not rerun the baseline.
-A run on `main` must record the first baseline before PR or `compare` runs can succeed.
+A run on the default branch must record the first baseline before PR or `compare` runs can succeed.
 The comparison appears in the job summary, a `HPC benchmark / <suite>` check and the PR comment.
 PR measurements always compare without recording, runs from other branches fail unless `mode` is `compare`.
 Recording retries reuse the ledger stored with the history, comparison retries reuse a thirty day artifact, neither appends another measurement.
@@ -167,9 +172,11 @@ For an existing documentation site, use `history` and copy the directory from th
 
 ## PR command
 
-Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment containing only `/hpc`.
-It verifies the commenter's role, `admin maintain` by default in `CB_COMMAND_ROLES`, and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default, with the PR head at that moment.
-The reply names the authorized commit, later pushes require another comment.
+Copy [hpc-command.yml](.github/workflows/hpc-command.yml) into the caller repository to run reviewed PRs with a comment `/hpc <commit>`.
+The commit is the reviewed PR head, at least seven hex characters.
+It verifies the commenter's role, `admin maintain` by default in `CB_COMMAND_ROLES`, and dispatches `CB_COMMAND_WORKFLOW`, `hpc-pr.yml` by default.
+If the PR head differs from the named commit, nothing is dispatched, so a push after the review cannot reach the cluster.
+The reply names the authorized commit or the reason for refusing, later pushes require another comment.
 Results appear as check runs on that commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
 The same run can be dispatched by hand with `pull_request` and `source_sha`.
 Leave `CB_TEST_ACTOR` unset outside this repository.
@@ -180,7 +187,7 @@ Leave `CB_TEST_ACTOR` unset outside this repository.
 Reusable workflows embed the Python helpers from `scripts/`, run `python scripts/embed_helpers.py` after editing them and commit the generated workflows.
 The benchmark action checks run the pinned action against deterministic improvement, warning and failure measurements.
 
-The integration suite runs against the configured GitLab project on main pushes, weekly and on dispatch.
+The integration suite runs against the configured GitLab project on pushes to `main`, weekly and on dispatch.
 Its [pipeline](.gitlab-ci.yml) needs a runner tagged `otus-shell` and a Slurm runner tagged `otus-slurm`, override the tags with `INTEGRATION_RUNNER_TAG` and `BENCHMARK_RUNNER_TAG` in the GitLab project variables.
 The `benchmark` scenario measures a Julia dense linear solve on Slurm, `BENCHMARK_SCHEDULER_PARAMETERS` and `BENCHMARK_JULIA_MODULE` adjust the allocation and module.
 The [history workflow](.github/workflows/benchmark-history.yml) publishes the same measurement to Pages on pushes, weekly and on dispatch.
@@ -196,7 +203,7 @@ A failing suite still records its point, Pages are redeployed from the branch re
 
 The continuation path runs from the default branch, merge changes to it before testing `handover`.
 
-The PR command test creates passing and failing draft PRs, posts `/hpc`, verifies continuation, reports and retries, then closes the PRs.
+The PR command test creates passing and failing draft PRs, posts `/hpc <commit>`, verifies continuation, reports and retries, then closes the PRs.
 It needs the following settings in this repository.
 
 | Setting | Type | Value |

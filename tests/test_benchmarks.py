@@ -71,6 +71,65 @@ class BenchmarkTests(unittest.TestCase):
         pr['head']['ref'] = 'unreviewed'
         self.assertFalse(hpc_command.authorized_test_pr(pr, 'user', 'user', 'pc2/test'))
 
+    def test_command_dispatches_only_the_commit_named_in_the_comment(self):
+        head = 'c' * 40
+        pr = dict(state='open', head=dict(sha=head, ref='feature', repo=dict(full_name='pc2/test')),
+                  user=dict(login='author'), title='Feature')
+        for body, dispatched in [(f'/hpc {head[:7]}', True), (f'  /hpc {head}\n', True),
+                                 (f'/hpc {"d" * 40}', False), ('/hpc', False), ('/hpc please', False)]:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                event = Path(directory) / 'event.json'
+                event.write_text(json.dumps(dict(
+                    issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
+                    comment=dict(id=99, body=body, user=dict(login='maintainer')))))
+                calls = []
+                def api(path, body=None):
+                    calls.append((path, body))
+                    if path.endswith('/pulls/7'):
+                        return pr
+                    if path.endswith('/permission'):
+                        return dict(role_name='maintain')
+                    if path.endswith('/dispatches'):
+                        return dict(workflow_run_id=5)
+                    return {}
+                env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test', CB_TEST_ACTOR='')
+                with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
+                    if dispatched:
+                        hpc_command.main()
+                    else:
+                        with self.assertRaises(ValueError):
+                            hpc_command.main()
+                dispatches = [body for path, body in calls if path.endswith('/dispatches')]
+                self.assertEqual(dispatches, [dict(ref='main', inputs=dict(pull_request='7', source_sha=head),
+                                                   return_run_details=True)] if dispatched else [])
+                replies = [body['body'] for path, body in calls if path.endswith('/issues/7/comments')]
+                self.assertEqual(len(replies), 1)
+                self.assertTrue(replies[0].startswith('<!-- hpc-command:99 -->'))
+                self.assertIn(f'Authorized commit {head}' if dispatched else 'Not dispatched', replies[0])
+
+    def test_command_ignores_other_comments_and_unauthorized_users(self):
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / 'event.json'
+            for body, role in [('/hpcfoo', 'maintain'), ('please run /hpc', 'maintain'), (f'/hpc {"c" * 40}', 'write')]:
+                with self.subTest(body=body):
+                    event.write_text(json.dumps(dict(
+                        issue=dict(number=7, pull_request={}), repository=dict(default_branch='main'),
+                        comment=dict(id=99, body=body, user=dict(login='someone')))))
+                    pr = dict(state='open', head=dict(sha='c' * 40, ref='feature', repo=dict(full_name='pc2/test')),
+                              user=dict(login='author'), title='Feature')
+                    calls = []
+                    def api(path, body=None):
+                        calls.append(path)
+                        return pr if path.endswith('/pulls/7') else dict(role_name=role)
+                    env = dict(GITHUB_EVENT_PATH=str(event), GITHUB_REPOSITORY='pc2/test', CB_TEST_ACTOR='')
+                    with patch.dict(os.environ, env), patch.object(hpc_command, 'api', side_effect=api):
+                        if role == 'write':
+                            with self.assertRaisesRegex(ValueError, 'cannot authorize'):
+                                hpc_command.main()
+                        else:
+                            hpc_command.main()
+                    self.assertFalse(any(path.endswith(('/comments', '/dispatches')) for path in calls))
+
     def test_pr_creation_uses_the_test_token_without_granting_it_branch_access(self):
         class CreatedPR(Exception):
             pass
@@ -171,6 +230,34 @@ class BenchmarkTests(unittest.TestCase):
                     (root / 'bench/data.js').write_text('window.BENCHMARK_DATA = ' + json.dumps(history))
                     with self.assertRaisesRegex(ValueError, 'names and units'):
                         benchmark.prepare()
+            finally:
+                os.chdir(old)
+
+    def test_recording_resolves_the_default_branch_when_the_event_lacks_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = Path.cwd()
+            os.chdir(root)
+            try:
+                context = dict(sha='b' * 40, pull_request='', project_id=1, pipeline_id=2, ref='trunk')
+                (root / 'context.json').write_text(json.dumps(context))
+                with zipfile.ZipFile(root / 'job.zip', 'w') as archive:
+                    archive.writestr('results.json', json.dumps([dict(name='solve', unit='seconds', value=1)]))
+                env = dict(CONFIG='{}', SUITE=json.dumps(dict(name='CPU', archive='job.zip', file='results.json')),
+                           CONTEXT=str(root / 'context.json'), ARTIFACTS=str(root), DEFAULT_BRANCH='',
+                           RUNNER_TEMP=str(root), GITHUB_OUTPUT=str(root / 'output'),
+                           GITHUB_REPOSITORY='pc2/test', GITHUB_RUN_ID='10')
+                for default, allowed in [('main', False), ('trunk', True)]:
+                    with self.subTest(default=default), patch.dict(os.environ, env), \
+                         patch.object(benchmark, 'command', return_value=''), \
+                         patch.object(benchmark, 'api', return_value=dict(default_branch=default)) as api:
+                        if allowed:
+                            benchmark.prepare()
+                            self.assertTrue(json.loads((root / 'benchmark-state.json').read_text())['record'])
+                        else:
+                            with self.assertRaisesRegex(ValueError, 'Only the default branch'):
+                                benchmark.prepare()
+                        api.assert_called_once_with('repos/pc2/test')
             finally:
                 os.chdir(old)
 

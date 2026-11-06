@@ -64,7 +64,9 @@ def prepare():
     if mode not in ('history', 'pages', 'compare'):
         raise ValueError('Unknown publication mode.')
     record = mode != 'compare' and not context['pull_request']
-    if record and context['ref'] != os.environ['DEFAULT_BRANCH']:
+    # Some event payloads lack the repository, the API knows the default branch.
+    default_branch = os.environ.get('DEFAULT_BRANCH') or api(f'repos/{os.environ["GITHUB_REPOSITORY"]}')['default_branch']
+    if record and context['ref'] != default_branch:
         raise ValueError('Only the default branch can update benchmark history.')
     tool = suite.get('tool', 'customSmallerIsBetter')
     if tool not in ('customSmallerIsBetter', 'customBiggerIsBetter', 'julia'):

@@ -50,11 +50,13 @@ jobs:
           
           def main():
               event = json.load(open(os.environ['GITHUB_EVENT_PATH']))
-              if 'pull_request' not in event['issue'] or event['comment']['body'].strip() != '/hpc':
+              body = event['comment']['body'].strip()
+              if 'pull_request' not in event['issue'] or not re.fullmatch(r'/hpc(\s.*)?', body, re.DOTALL):
                   return
               repo = os.environ['GITHUB_REPOSITORY']
               number = event['issue']['number']
               login = event['comment']['user']['login']
+              marker = f'<!-- hpc-command:{event["comment"]["id"]} -->'
               pr = api(f'repos/{repo}/pulls/{number}')
               if pr['state'] != 'open':
                   raise ValueError('The PR is not open.')
@@ -70,12 +72,18 @@ jobs:
               sha = pr['head']['sha']
               if not re.fullmatch(r'[0-9a-f]{40}', sha):
                   raise ValueError('Invalid PR commit.')
+              # The comment names the reviewed commit, the PR head may have moved since the review.
+              reviewed = re.fullmatch(r'/hpc\s+([0-9a-f]{7,40})', body)
+              if not reviewed or not sha.startswith(reviewed[1]):
+                  reason = (f'The PR head is {sha}, which is not the named commit {reviewed[1]}.' if reviewed
+                            else 'Name the reviewed commit, for example `/hpc ' + sha[:12] + '`.')
+                  api(f'repos/{repo}/issues/{number}/comments', dict(body=f'{marker}\n\nNot dispatched. {reason}'))
+                  raise ValueError(reason)
               workflow = os.environ.get('CB_COMMAND_WORKFLOW') or 'hpc-pr.yml'
               result = api(f'repos/{repo}/actions/workflows/{workflow}/dispatches',
                            dict(ref=event['repository']['default_branch'],
                                 inputs=dict(pull_request=str(number), source_sha=sha), return_run_details=True))
               run_id = result['workflow_run_id']
-              marker = f'<!-- hpc-command:{event["comment"]["id"]} -->'
               api(f'repos/{repo}/issues/{number}/comments',
                   dict(body=f'{marker}\n\nAuthorized commit {sha}.\n[HPC run](https://github.com/{repo}/actions/runs/{run_id}).'))
           
