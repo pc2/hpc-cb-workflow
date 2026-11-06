@@ -48,6 +48,10 @@ on:
         description: Minutes one run monitors before continuing in another run, at most 330.
         type: string
         default: '330'
+      collect_timeout_minutes:
+        description: Minutes for downloading and uploading the artifacts after the pipeline finished, at most 360.
+        type: string
+        default: '60'
     secrets:
       GITLAB_TOKEN:
         required: true
@@ -177,6 +181,7 @@ jobs:
           SELECTED_SHA: ${{ env.HPC_SOURCE_SHA }}
           BENCHMARK: ${{ inputs.benchmark }}
           EXPECTED_PIPELINE_STATUS: ${{ inputs.expected_pipeline_status }}
+          COLLECT_TIMEOUT_MINUTES: ${{ inputs.collect_timeout_minutes }}
         run: |
           set -euo pipefail
           fail() {
@@ -194,6 +199,8 @@ jobs:
             fail 'benchmark must be a JSON object whose suites, if given, form an array.'
           [[ $EXPECTED_PIPELINE_STATUS == success || $EXPECTED_PIPELINE_STATUS == failed ]] ||
             fail "expected_pipeline_status must be success or failed, not '$EXPECTED_PIPELINE_STATUS'."
+          [[ $COLLECT_TIMEOUT_MINUTES =~ ^[1-9][0-9]*$ && $COLLECT_TIMEOUT_MINUTES -le 360 ]] ||
+            fail "collect_timeout_minutes must be between 1 and 360, not '$COLLECT_TIMEOUT_MINUTES'."
       # Continuation dispatches the caller on the default branch, a missing caller or input surfaces only after max_wait_minutes.
       - name: Check continuation
         shell: bash
@@ -520,7 +527,7 @@ jobs:
     needs: wait
     if: ${{ !cancelled() && needs.wait.outputs.finished == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ fromJSON(inputs.collect_timeout_minutes) }}
     outputs:
       pipeline_status: ${{ steps.identity.outputs.status }}
     permissions:
@@ -590,6 +597,8 @@ jobs:
           overwrite: true
           if-no-files-found: warn
           retention-days: 30
+          # The collected files are zip archives already.
+          compression-level: 0
       - name: Report to the PR
         if: always() && steps.identity.outcome == 'success' && env.PR != ''
         shell: bash

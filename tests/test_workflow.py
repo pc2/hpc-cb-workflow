@@ -107,6 +107,9 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert json.loads(history['jobs']['benchmark']['with']['benchmark'])['mode'] == 'pages'
     assert 'results/' in gitlab_ci['quick']['artifacts']['paths']
 assert jobs['wait']['timeout-minutes'] == '345'
+assert jobs['collect']['timeout-minutes'] == '${{ fromJSON(inputs.collect_timeout_minutes) }}'
+assert workflow['on']['workflow_call']['inputs']['collect_timeout_minutes']['default'] == '60'
+assert by_name['Upload GitLab artifacts']['with']['compression-level'] == '0'
 assert "(inputs.context_run_id || github.event.inputs.context_run_id) == ''" in jobs['start']['if']
 assert "(inputs.context_run_id || github.event.inputs.context_run_id) != ''" in jobs['wait']['if']
 assert "inputs.gitlab_project_id != '' || !github.event.repository.fork" in jobs['start']['if']
@@ -409,7 +412,7 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         'POLL_TIMEOUT': '0', 'MAX_WAIT_MINUTES': '0', 'CHECK_RUNS': 'true', 'SUMMARY': 'true',
         'LOG_TRACES': 'false', 'CHECK_PREFIX': 'gitlab/42/123/', 'STATUS_CONTEXT': 'gitlab-ci/123',
         'RUNNER_TEMP': str(fixture), 'MOCK_STATUS': 'success', 'DATE_CALLED': str(fixture / 'date'),
-        'SET_STATUS': 'false', 'VARIABLE_PATTERNS': '',
+        'SET_STATUS': 'false', 'VARIABLE_PATTERNS': '', 'COLLECT_TIMEOUT_MINUTES': '60',
         'PIPELINE_READ_COUNT': str(fixture / 'pipeline-reads'),
         'GIT_ARGUMENT_LOG': str(fixture / 'git.jsonl'),
     }
@@ -572,7 +575,9 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
                                    ({'GITLAB_TOKEN': ''}, 'GITLAB_TOKEN'), ({'PR': 'seven'}, 'pull_request must'),
                                    ({'PR': '', 'SELECTED_SHA': 'a' * 40}, 'source_sha needs pull_request'),
                                    ({'SELECTED_SHA': 'a' * 7}, 'full 40 character'), ({'BENCHMARK': '[]'}, 'benchmark must'),
-                                   ({'EXPECTED_PIPELINE_STATUS': 'canceled'}, 'expected_pipeline_status')]:
+                                   ({'EXPECTED_PIPELINE_STATUS': 'canceled'}, 'expected_pipeline_status'),
+                                   ({'COLLECT_TIMEOUT_MINUTES': '361'}, 'collect_timeout_minutes'),
+                                   ({'COLLECT_TIMEOUT_MINUTES': 'long'}, 'collect_timeout_minutes')]:
             result = run(validate, {'SELECTED_SHA': ''} | overrides)
             assert result.returncode != 0 and f'::error::' in result.stdout and message in result.stdout, (overrides, result.stdout)
         final = by_name['Set final result']['run']

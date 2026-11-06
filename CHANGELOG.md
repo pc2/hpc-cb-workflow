@@ -23,6 +23,7 @@ The workflow reads context_run_id, pull_request, source_sha and command_comment 
 Configuration, PR and resume checks name the input or state to fix, PR runs failing before collection comment on the PR.
 The variable_patterns input restricts the values of pipeline variables before anything reaches GitLab.
 The start job warns about callers that cannot continue, skips unconfigured forks and fails on unsupported events.
+Artifact collection has a configurable time limit and uploads the archives without compressing them again.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.
 GitLab outages are retried during monitoring and continuation dispatches are retried.
 Checks and collected artifacts include all jobs and child pipelines.

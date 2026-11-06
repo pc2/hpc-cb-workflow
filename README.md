@@ -107,6 +107,7 @@ workflow:
 | `benchmark` | Benchmark publication configuration as JSON, see below. |
 | `expected_pipeline_status` | The required terminal status, `success` by default, `failed` for deliberate failure tests. |
 | `max_wait_minutes` | Minutes one run monitors before continuing in another run, at most 330. |
+| `collect_timeout_minutes` | Minutes for collecting the artifacts after the pipeline finished, 60 by default, at most 360. |
 
 The `pipeline_status` output exposes the verified GitLab status after collection.
 
