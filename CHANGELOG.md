@@ -26,6 +26,7 @@ The start job warns about callers that cannot continue, skips unconfigured forks
 Artifact collection has a configurable time limit and uploads the archives without compressing them again.
 Job checks are named HPC #<pipeline> / <job> instead of gitlab/<project>/<pipeline>/<job>.
 The pipeline check is named HPC #<pipeline>, so it sorts before its job checks.
+Only benchmark suites with a collected archive start a benchmark job, new measurements extend a suite.
 The collect job also reports PR runs that failed earlier, the separate failure job is gone.
 Benchmark reports mark each measurement as ok, warning or failure and count warnings in the check title, the action's duplicate job summary is off.
 Pushes to the default branch start pipelines, it no longer has to be named `main`.

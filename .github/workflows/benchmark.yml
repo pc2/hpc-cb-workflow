@@ -129,6 +129,8 @@ jobs:
                   raise ValueError('Invalid suite name.')
               member = relative_path(suite['file'])
               with zipfile.ZipFile(Path(os.environ['ARTIFACTS']) / archive) as source:
+                  if member not in source.namelist():
+                      raise ValueError(f'The archive {archive} lacks the measurement {member}.')
                   info = source.getinfo(member)
                   if info.file_size > 20_000_000:
                       raise ValueError('Benchmark output exceeds twenty megabytes.')
@@ -186,11 +188,15 @@ jobs:
                   raise ValueError('No comparable baseline with a different commit exists.')
               if baseline and baseline.get('tool') != tool:
                   raise ValueError('The benchmark format differs from the baseline.')
+              # New measurements extend a suite, missing ones or changed units point to a broken measurement.
               if baseline and not previous and tool.startswith('custom'):
                   old = {entry['name']: entry for entry in baseline['benches']}
-                  for item in json.loads(raw):
-                      if item['name'] not in old or old[item['name']]['unit'] != item['unit']:
-                          raise ValueError('Benchmark names and units must match the baseline.')
+                  current = {item['name']: item for item in json.loads(raw)}
+                  missing = sorted(set(old) - set(current))
+                  if missing:
+                      raise ValueError(f'Measurements of the baseline are missing: {", ".join(missing)}.')
+                  if any(old[name]['unit'] != item['unit'] for name, item in current.items() if name in old):
+                      raise ValueError('Benchmark units must match the baseline.')
               state = dict(context=context, config=config, suite=suite, branch=branch, directory=directory,
                            record=record, key=key, ledger=ledger, previous=previous,
                            receipt_name=receipt_name, baseline_data=baseline, entries=len(entries),
@@ -221,8 +227,8 @@ jobs:
                   if len(entries) != state['entries'] + 1 or current['commit']['id'] != context['sha']:
                       raise ValueError('The benchmark action did not produce the expected measurement.')
                   previous = {b['name']: b for b in (state['baseline_data'] or {}).get('benches', [])}
-                  if previous and any(b['name'] not in previous or previous[b['name']]['unit'] != b['unit']
-                                      for b in current['benches']):
+                  if previous and (set(previous) - {b['name'] for b in current['benches']} or any(
+                          b['name'] in previous and previous[b['name']]['unit'] != b['unit'] for b in current['benches'])):
                       raise ValueError('The generated measurements do not match the baseline.')
                   def cell(value):
                       return str(value).replace('|', '\\|').replace('\n', ' ')

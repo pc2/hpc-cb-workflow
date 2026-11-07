@@ -536,6 +536,7 @@ jobs:
     timeout-minutes: ${{ fromJSON(inputs.collect_timeout_minutes) }}
     outputs:
       pipeline_status: ${{ steps.identity.outputs.status }}
+      suites: ${{ steps.suites.outputs.suites }}
     permissions:
       contents: read
       actions: read
@@ -598,6 +599,21 @@ jobs:
           PIPELINE_ID: ${{ env.PIPELINE_ID }}
           ARTIFACT_DIR: ${{ runner.temp }}/hpc-artifacts
           UPLOAD_ARTIFACTS: 'false'
+      # Runs may leave jobs out, only suites with a collected archive start a benchmark job.
+      - name: Select benchmark suites
+        id: suites
+        if: env.FINISHED == 'true'
+        shell: bash
+        env:
+          SUITES: ${{ needs.wait.outputs.suites || '[]' }}
+          ARTIFACT_DIR: ${{ runner.temp }}/hpc-artifacts
+        run: |
+          set -euo pipefail
+          mapfile -t collected < <(find "$ARTIFACT_DIR" -maxdepth 1 -type f -printf '%f\n' 2> /dev/null || true)
+          selected=$(jq -c --args '[.[] | select(.archive as $archive | $ARGS.positional | index($archive))]' "${collected[@]}" <<< "$SUITES")
+          jq -r --args '.[] | select(.archive as $archive | $ARGS.positional | index($archive) | not)
+            | "Benchmark suite \(.name) skipped, this run collected no archive \(.archive)."' "${collected[@]}" <<< "$SUITES" >> "$GITHUB_STEP_SUMMARY"
+          echo "suites=$selected" >> "$GITHUB_OUTPUT"
       - name: Upload GitLab artifacts
         id: upload
         if: always() && steps.identity.outcome == 'success'
@@ -678,12 +694,12 @@ jobs:
 
   benchmark:
     needs: [wait, collect]
-    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.collect.outputs.pipeline_status == 'success' && needs.wait.outputs.suites != '[]' && needs.wait.outputs.suites != '' }}
+    if: ${{ !cancelled() && needs.collect.result == 'success' && needs.collect.outputs.pipeline_status == 'success' && needs.collect.outputs.suites != '[]' && needs.collect.outputs.suites != '' }}
     strategy:
       fail-fast: false
       max-parallel: 1
       matrix:
-        suite: ${{ fromJSON(needs.wait.outputs.suites) }}
+        suite: ${{ fromJSON(needs.collect.outputs.suites) }}
     uses: ./.github/workflows/benchmark.yml
     with:
       context_run_id: ${{ (inputs.context_run_id || github.event.inputs.context_run_id) || github.run_id }}

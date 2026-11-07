@@ -172,7 +172,7 @@ benchmark: >-
 
 Custom formats contain a JSON array of objects with `name`, `unit` and `value`.
 The `julia` format reads the estimates exported by `BenchmarkTools.save`.
-The first recording fixes the measurement names and units of a suite, a changed set needs a new suite name.
+New measurements extend a suite, measurements missing from the baseline or changed units fail the comparison.
 The action compares against the latest recorded result of the suite from a different commit, it does not rerun the baseline.
 A run on the default branch must record the first baseline before PR or `compare` runs can succeed.
 The comparison appears in the job summary, a `HPC benchmark / <suite>` check and the PR comment.
@@ -234,7 +234,8 @@ Free text inputs, for example several suites joined by `+`, need a pattern, othe
 ```
 
 A value outside its pattern stops the run before anything is pushed to GitLab.
-A caller with benchmarks must only list suites whose jobs run for the selected options.
+Only suites whose archive was collected start a benchmark job, collection notes the others in its summary.
+A missing file inside a collected archive fails the suite.
 Continuation runs keep the variables and benchmark configuration of the original start.
 
 ## Development

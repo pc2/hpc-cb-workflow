@@ -45,6 +45,9 @@ assert caller['permissions'] == workflow['permissions']
 assert 'statuses' not in caller['permissions']
 assert 'pipeline_variables' not in caller['jobs']['hpc']['with']
 assert set(caller['on']['workflow_dispatch']['inputs']) == {'context_run_id', 'pull_request', 'source_sha', 'command_comment'}
+assert jobs['benchmark']['strategy']['matrix']['suite'] == '${{ fromJSON(needs.collect.outputs.suites) }}'
+assert "needs.collect.outputs.suites != '[]'" in jobs['benchmark']['if']
+assert jobs['collect']['outputs']['suites'] == '${{ steps.suites.outputs.suites }}'
 command = yaml.load((root / '.github/workflows/hpc-command.yml').read_text(), Loader=yaml.BaseLoader)
 assert set(command['on']) == {'workflow_call'}
 assert command['on']['workflow_call']['inputs']['workflow']['required'] == 'true'
@@ -602,6 +605,23 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         assert any(call[1] == 'repos/example/project/contents/.github/workflows/hpc.yml?ref=main' for call in calls)
 
     test_continuation_problems_are_reported_at_start()
+
+    def test_benchmarks_start_only_for_suites_with_a_collected_archive():
+        select = by_name['Select benchmark suites']['run']
+        directory = fixture / 'selected-artifacts'
+        directory.mkdir(exist_ok=True)
+        (directory / 'cpu1.13.zip').write_bytes(b'zip')
+        suites = [{'name': 'CPU 1.13', 'archive': 'cpu1.13.zip'}, {'name': 'GPU 1.13', 'archive': 'gpu1.13.zip'}]
+        result = run(select, {'SUITES': json.dumps(suites), 'ARTIFACT_DIR': str(directory)})
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert json.loads(output.read_text().removeprefix('suites=')) == suites[:1]
+        assert summary.read_text() == 'Benchmark suite GPU 1.13 skipped, this run collected no archive gpu1.13.zip.\n'
+        result = run(select, {'SUITES': json.dumps(suites), 'ARTIFACT_DIR': str(fixture / 'missing')})
+        assert result.returncode == 0 and json.loads(output.read_text().removeprefix('suites=')) == []
+        result = run(select, {'SUITES': '[]', 'ARTIFACT_DIR': str(directory)})
+        assert result.returncode == 0 and json.loads(output.read_text().removeprefix('suites=')) == []
+
+    test_benchmarks_start_only_for_suites_with_a_collected_archive()
 
     def test_runs_failing_before_collection_are_reported_to_the_pr():
         collect = jobs['collect']

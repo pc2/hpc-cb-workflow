@@ -435,8 +435,55 @@ class BenchmarkTests(unittest.TestCase):
                     self.assertEqual(state['baseline'], 'a' * 40)
                     history['entries']['CPU'][0]['benches'][0]['name'] = 'different'
                     (root / 'bench/data.js').write_text('window.BENCHMARK_DATA = ' + json.dumps(history))
-                    with self.assertRaisesRegex(ValueError, 'names and units'):
+                    with self.assertRaisesRegex(ValueError, 'baseline are missing: different'):
                         benchmark.prepare()
+            finally:
+                os.chdir(old)
+
+    def prepare_with(self, root, measurements, baseline, suite=None):
+        (root / 'bench').mkdir(exist_ok=True)
+        (root / 'output').write_text('')
+        context = dict(sha='b' * 40, pull_request='7', project_id=1, pipeline_id=2, ref='main')
+        (root / 'context.json').write_text(json.dumps(context))
+        if measurements is not None:
+            with zipfile.ZipFile(root / 'job.zip', 'w') as archive:
+                archive.writestr('results.json', json.dumps(measurements))
+        history = dict(entries={'CPU': [dict(commit=dict(id='a' * 40), tool='customSmallerIsBetter', benches=baseline)]})
+        (root / 'bench/data.js').write_text('window.BENCHMARK_DATA = ' + json.dumps(history))
+        env = dict(CONFIG='{}', SUITE=json.dumps(dict(name='CPU', archive='job.zip', file='results.json') | (suite or {})),
+                   CONTEXT=str(root / 'context.json'), ARTIFACTS=str(root), DEFAULT_BRANCH='main',
+                   RUNNER_TEMP=str(root), GITHUB_OUTPUT=str(root / 'output'), GITHUB_STEP_SUMMARY=str(root / 'summary'),
+                   GITHUB_REPOSITORY='pc2/test', GITHUB_RUN_ID='10', GH_TOKEN='test-token')
+        with patch.dict(os.environ, env), patch.object(benchmark, 'command', return_value='exists'), \
+             patch.object(benchmark, 'api', return_value={'artifacts': []}):
+            benchmark.prepare()
+        return (root / 'output').read_text()
+
+    def test_suites_accept_new_measurements_but_not_missing_ones_or_changed_units(self):
+        solve = dict(name='solve', unit='s', value=1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = Path.cwd()
+            os.chdir(root)
+            try:
+                self.prepare_with(root, [solve, dict(name='scaling', unit='s', value=2)], [solve])
+                self.assertEqual(json.loads((root / 'benchmark-state.json').read_text())['baseline'], 'a' * 40)
+                with self.assertRaisesRegex(ValueError, 'baseline are missing: solve'):
+                    self.prepare_with(root, [dict(name='scaling', unit='s', value=2)], [solve])
+                with self.assertRaisesRegex(ValueError, 'units must match'):
+                    self.prepare_with(root, [dict(solve, unit='ms')], [solve])
+            finally:
+                os.chdir(old)
+
+    def test_a_collected_archive_must_contain_the_measurement(self):
+        solve = dict(name='solve', unit='s', value=1)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = Path.cwd()
+            os.chdir(root)
+            try:
+                with self.assertRaisesRegex(ValueError, 'lacks the measurement other.json'):
+                    self.prepare_with(root, [solve], [solve], dict(file='other.json'))
             finally:
                 os.chdir(old)
 
