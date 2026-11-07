@@ -235,6 +235,25 @@ Free text inputs, for example several suites joined by `+`, need a pattern, othe
 
 A value outside its pattern stops the run before anything is pushed to GitLab.
 Only suites whose archive was collected start a benchmark job, collection notes the others in its summary.
+The [benchmark example](examples/benchmark.yml) selects validation and benchmark jobs separately, each suite reads the archive of its benchmark job.
+
+```yaml
+variables:
+  CHECKS: all
+  BENCHMARKS: all
+
+test-gpu:
+  rules:
+    - if: $CHECKS =~ /(^|\+)(all|gpu)(\+|$)/
+
+bench-gpu:
+  rules:
+    - if: $BENCHMARKS =~ /(^|\+)(all|gpu)(\+|$)/
+  artifacts:
+    paths: [results/benchmark.json]
+```
+
+A run with `checks=none` and `benchmarks=gpu` then measures only the GPU suite.
 A missing file inside a collected archive fails the suite.
 Continuation runs keep the variables and benchmark configuration of the original start.
 

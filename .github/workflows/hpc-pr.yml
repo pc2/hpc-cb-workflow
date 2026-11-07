@@ -47,6 +47,8 @@ jobs:
       benchmark: >-
         {"mode":"history","branch":"hpc-test-results","suites":[
           {"name":"Regression fixture","archive":"regression.zip",
+           "file":"results/benchmark-action.json","directory":"bench"},
+          {"name":"Left out","archive":"left-out.zip",
            "file":"results/benchmark-action.json","directory":"bench"}]}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}

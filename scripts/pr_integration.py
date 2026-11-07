@@ -110,6 +110,40 @@ def command(repo, pr, body):
     raise AssertionError(f'The command {body} got no reply.')
 
 
+def verify_benchmark_jobs(repo, run_id, sha):
+    """Checks that only the suite with a collected archive started a benchmark job."""
+    reports = [j['name'] for j in items(f'repos/{repo}/actions/runs/{run_id}/jobs', 'jobs') if j['name'].endswith('/ report')]
+    if len(reports) != 1 or 'Regression fixture' not in reports[0]:
+        raise AssertionError(f'Expected one benchmark job for the collected suite: {reports}')
+    checks = api(f'repos/{repo}/commits/{sha}/check-runs?per_page=100')['check_runs']
+    if any(c['name'] == 'HPC benchmark / Left out' for c in checks):
+        raise AssertionError('A suite without a collected archive reported a check.')
+
+
+def verify_failure_report(repo, pr, sha):
+    """Dispatches a commit outside the PR and checks that collection reports the failed start to the PR."""
+    run_id = api(f'repos/{repo}/actions/workflows/hpc-pr.yml/dispatches',
+                 dict(ref=api(f'repos/{repo}')['default_branch'], return_run_details=True,
+                      inputs=dict(pull_request=str(pr), source_sha=sha)))['workflow_run_id']
+    deadline = time.monotonic() + 900
+    while api(f'repos/{repo}/actions/runs/{run_id}')['status'] != 'completed':
+        if time.monotonic() > deadline:
+            raise TimeoutError(f'The failing run {run_id} did not finish.')
+        time.sleep(15)
+    jobs = {j['name'].split(' / ', 1)[-1]: j['conclusion'] for j in items(f'repos/{repo}/actions/runs/{run_id}/jobs', 'jobs')}
+    if jobs.get('Start on GitLab') != 'failure' or jobs.get('Monitor GitLab jobs') != 'skipped':
+        raise AssertionError(f'The run {run_id} did not fail before reaching GitLab: {jobs}')
+    marker = f'<!-- hpc-failure:{run_id}:1 -->'
+    for _ in range(30):
+        reports = [c for c in comments(repo, pr) if c['user']['login'] == 'github-actions[bot]' and c['body'].startswith(marker)]
+        if reports:
+            if 'Start on GitLab, step Authorize the run' not in reports[0]['body']:
+                raise AssertionError(f'The failure report does not name the failed step: {reports[0]["body"]}')
+            return
+        time.sleep(10)
+    raise AssertionError(f'No failure report for run {run_id}.')
+
+
 def run(state_path):
     token = os.environ.get('CB_TEST_TOKEN')
     if not token:
@@ -142,6 +176,8 @@ def run(state_path):
         state[-1]['pr'] = pr
         state_path.write_text(json.dumps(state))
         if scenario == 'pass':
+            # A dispatch without a person and comment fails before GitLab, collection reports it to the PR.
+            verify_failure_report(repo, pr, sha)
             # GitHub must reject an option the caller does not declare, before any run starts.
             reply = command(repo, pr, f'/hpc {commit} undeclared=1')
             if not reply.startswith('Not dispatched') or '/actions/runs/' in reply:
@@ -158,6 +194,7 @@ def run(state_path):
         result = wait_run(repo, origin, expected)
         if result['id'] == origin:
             raise AssertionError('The PR test did not exercise continuation.')
+        verify_benchmark_jobs(repo, result['id'], commit)
         report_id = verify_report(repo, pr, commit, expected)
         api(f'repos/{repo}/actions/runs/{result["id"]}/rerun', method='POST')
         wait_run(repo, result['id'], expected, result['run_attempt'] + 1)

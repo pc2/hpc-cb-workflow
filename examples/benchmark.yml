@@ -9,6 +9,14 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      checks:
+        description: Validation jobs to run, all, none or cpu and gpu joined by +.
+        type: string
+        default: all
+      benchmarks:
+        description: Benchmarks to run, all, none or cpu and gpu joined by +.
+        type: string
+        default: all
       pull_request:
         description: Leave empty, or a PR number to run a reviewed commit of that PR.
         type: string
@@ -40,12 +48,18 @@ jobs:
     with:
       gitlab_hostname: ${{ vars.GITLAB_HOSTNAME }}
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
+      pipeline_variables: |
+        CHECKS=${{ inputs.checks || 'all' }}
+        BENCHMARKS=${{ inputs.benchmarks || 'all' }}
+      variable_patterns: |
+        CHECKS=none|all|(cpu|gpu)(\+(cpu|gpu))*
+        BENCHMARKS=none|all|(cpu|gpu)(\+(cpu|gpu))*
       benchmark: >-
         {"mode":"history","branch":"hpc-results","suites":[
-          {"name":"CPU measurements","tool":"customSmallerIsBetter",
-           "archive":"benchmark.zip","file":"results/benchmark.json",
-           "directory":"bench/cpu","alert_threshold":"115%",
-           "fail_threshold":"150%"}]}
+          {"name":"CPU","archive":"bench-cpu.zip","file":"results/benchmark.json",
+           "directory":"bench","alert_threshold":"115%","fail_threshold":"150%"},
+          {"name":"GPU","archive":"bench-gpu.zip","file":"results/benchmark.json",
+           "directory":"bench","alert_threshold":"120%","fail_threshold":"200%"}]}
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
