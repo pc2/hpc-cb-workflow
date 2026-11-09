@@ -62,5 +62,10 @@
     "verdict": "success",
     "summary": "Benchmark suite Regression fixture.\n\n| Measurement | Current | Baseline | Unit | Ratio | Status |\n| --- | --- | --- | --- | --- | --- |\n| controlled measurement | 100 | 100 | seconds | 1.000 | ok |\n\nBaseline commit 58f6bf270de20d78d395877306e627c25f0c53d5.\n\nMeasured commit 499b0d0c0729a16761d9cdda86263e820af97cf5, benchmark result success.\n\nWarning threshold 115%, failure threshold 150%.\n",
     "warnings": 0
+  },
+  "10422/160386/Regression fixture": {
+    "verdict": "success",
+    "summary": "Benchmark suite Regression fixture.\n\n| Measurement | Current | Baseline | Unit | Ratio | Status |\n| --- | --- | --- | --- | --- | --- |\n| controlled measurement | 100 | 100 | seconds | 1.000 | ok |\n\nBaseline commit 58f6bf270de20d78d395877306e627c25f0c53d5.\n\nMeasured commit 499b0d0c0729a16761d9cdda86263e820af97cf5, benchmark result success.\n\nWarning threshold 115%, failure threshold 150%.\n",
+    "warnings": 0
   }
 }
