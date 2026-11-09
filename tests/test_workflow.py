@@ -68,7 +68,10 @@ assert workflow['on']['workflow_call']['secrets']['GITLAB_TRIGGER_TOKEN']['requi
 assert workflow['on']['workflow_call']['inputs']['max_wait_minutes']['default'] == '330'
 assert workflow['on']['workflow_call']['inputs']['expected_pipeline_status']['default'] == 'success'
 assert workflow['on']['workflow_call']['outputs']['pipeline_status']['value'] == '${{ jobs.collect.outputs.pipeline_status }}'
-assert jobs['benchmark']['if'].find("needs.collect.outputs.pipeline_status == 'success'") >= 0
+assert 'pipeline_status' not in jobs['benchmark']['if'] and 'needs.collect.result' not in jobs['benchmark']['if']
+collect_steps = [step['name'] for step in jobs['collect']['steps']]
+assert collect_steps.index('Select benchmark suites') > collect_steps.index('Upload GitLab artifacts')
+assert 'always()' not in jobs['collect']['steps'][collect_steps.index('Select benchmark suites')]['if']
 assert "needs.benchmark.result == 'failure'" in jobs['pages']['if'] and "needs.wait.outputs.pull_request == ''" in jobs['pages']['if']
 
 
@@ -606,22 +609,21 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
 
     test_continuation_problems_are_reported_at_start()
 
-    def test_benchmarks_start_only_for_suites_with_a_collected_archive():
+    def test_benchmarks_start_only_for_suites_whose_archive_comes_from_a_successful_job():
         select = by_name['Select benchmark suites']['run']
-        directory = fixture / 'selected-artifacts'
-        directory.mkdir(exist_ok=True)
-        (directory / 'cpu1.13.zip').write_bytes(b'zip')
-        suites = [{'name': 'CPU 1.13', 'archive': 'cpu1.13.zip'}, {'name': 'GPU 1.13', 'archive': 'gpu1.13.zip'}]
-        result = run(select, {'SUITES': json.dumps(suites), 'ARTIFACT_DIR': str(directory)})
+        status_file = fixture / 'artifact-status.json'
+        status_file.write_text(json.dumps({'cpu1.13.zip': 'success', 'gpu1.13.zip': 'failed'}))
+        suites = [{'name': 'CPU 1.13', 'archive': 'cpu1.13.zip'}, {'name': 'GPU 1.13', 'archive': 'gpu1.13.zip'},
+                  {'name': 'CPU 1.10', 'archive': 'cpu1.10.zip'}]
+        result = run(select, {'SUITES': json.dumps(suites), 'STATUS_FILE': str(status_file)})
         assert result.returncode == 0, (result.stdout, result.stderr)
         assert json.loads(output.read_text().removeprefix('suites=')) == suites[:1]
-        assert summary.read_text() == 'Benchmark suite GPU 1.13 skipped, this run collected no archive gpu1.13.zip.\n'
-        result = run(select, {'SUITES': json.dumps(suites), 'ARTIFACT_DIR': str(fixture / 'missing')})
-        assert result.returncode == 0 and json.loads(output.read_text().removeprefix('suites=')) == []
-        result = run(select, {'SUITES': '[]', 'ARTIFACT_DIR': str(directory)})
+        assert summary.read_text() == ('Benchmark suite GPU 1.13 skipped, the job of archive gpu1.13.zip finished with failed.\n'
+                                       'Benchmark suite CPU 1.10 skipped, this run collected no archive cpu1.10.zip.\n')
+        result = run(select, {'SUITES': '[]', 'STATUS_FILE': str(status_file)})
         assert result.returncode == 0 and json.loads(output.read_text().removeprefix('suites=')) == []
 
-    test_benchmarks_start_only_for_suites_with_a_collected_archive()
+    test_benchmarks_start_only_for_suites_whose_archive_comes_from_a_successful_job()
 
     def test_runs_failing_before_collection_are_reported_to_the_pr():
         collect = jobs['collect']
@@ -1037,10 +1039,10 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
             assert timeout, url
             page = (params or {}).get('page', 1)
             if url.endswith('/pipelines/123/jobs'):
-                jobs = [{'id': index, 'name': f'job {index}', 'stage': 'check', 'artifacts': archive} for index in range(150)]
+                jobs = [{'id': index, 'name': f'job {index}', 'status': 'success', 'stage': 'check', 'artifacts': archive} for index in range(150)]
                 return Response(jobs[(page - 1) * 100:page * 100])
             if url.endswith('/pipelines/456/jobs'):
-                return Response([{'id': 1000, 'name': 'job 0', 'stage': 'check', 'artifacts': archive}] if page == 1 else [])
+                return Response([{'id': 1000, 'name': 'job 0', 'status': 'success', 'stage': 'check', 'artifacts': archive}] if page == 1 else [])
             if url.endswith('/pipelines/123/bridges'):
                 return Response([{'name': 'child', 'downstream_pipeline': {'id': 456, 'project_id': 42}},
                                  {'name': 'other', 'downstream_pipeline': {'id': 789, 'project_id': 7}}] if page == 1 else [])

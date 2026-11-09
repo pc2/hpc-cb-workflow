@@ -130,6 +130,7 @@ Collect uploads the GitLab artifacts with a thirty day retention and posts one P
 A PR run that fails before collection comments with the failed step instead.
 Child pipeline archives are named `<trigger job>_<job>.zip`.
 Collection fails when the pipeline fails or an artifact download fails, unless `expected_pipeline_status` requires the failure.
+Suites whose archive comes from a successful job are compared and recorded also when other jobs of the pipeline fail.
 A pipeline without artifacts passes, the summary reports the number of collected archives.
 `expire_in` must outlast the queue time of the following jobs, since collection starts after the whole pipeline.
 
