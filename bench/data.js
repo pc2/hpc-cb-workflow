@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794197029316,
+  "lastUpdate": 1794211298806,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Regression fixture": [
@@ -426,6 +426,33 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/pc2/hpc-cb-workflow/commit/499b0d0c0729a16761d9cdda86263e820af97cf5"
         },
         "date": 1794197029305,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "controlled measurement",
+            "value": 100,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "committer": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "id": "1eaa31d7e9035ea9c662af1bfd18d90a6654804d",
+          "message": "record complete benchmark series of failed pipelines",
+          "timestamp": "2026-11-09T07:43:02Z",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/1eaa31d7e9035ea9c662af1bfd18d90a6654804d"
+        },
+        "date": 1794211298799,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
