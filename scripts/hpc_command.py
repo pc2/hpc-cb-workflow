@@ -75,11 +75,20 @@ def main():
     number = event['issue']['number']
     login = event['comment']['user']['login']
     marker = f'<!-- hpc-command:{event["comment"]["id"]} -->'
+
+    def react(content):
+        # The reaction acknowledges the command at a glance, a failure must not affect the dispatch.
+        try:
+            api(f'repos/{repo}/issues/comments/{event["comment"]["id"]}/reactions', dict(content=content))
+        except subprocess.CalledProcessError:
+            pass
+
     pr = api(f'repos/{repo}/pulls/{number}')
     if pr['state'] != 'open':
         raise ValueError('The PR is not open.')
     permission = api(f'repos/{repo}/collaborators/{login}/permission').get('permission')
     if permission not in ('write', 'admin'):
+        react('-1')
         raise ValueError('The commenter needs repository write access to authorize cluster execution.')
     # The comment names the reviewed commits, the PR may have received others since the review.
     commits = pr_commits(repo, number)
@@ -88,6 +97,7 @@ def main():
     selected, options, reasons = select_commits(body, commits, pr['head']['sha'])
 
     def refuse(reasons):
+        react('confused')
         api(f'repos/{repo}/issues/{number}/comments',
             dict(body=f'{marker}\n\nNot dispatched.\n\n' + '\n'.join(f'- {reason}' for reason in reasons)))
         raise ValueError(' '.join(reasons))
@@ -117,6 +127,7 @@ def main():
     finally:
         # Announce every started run, also when a later dispatch fails.
         if lines:
+            react('rocket')
             api(f'repos/{repo}/issues/{number}/comments', dict(body=f'{marker}\n\n' + '\n\n'.join(lines)))
 
 

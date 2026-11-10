@@ -100,7 +100,16 @@ class BenchmarkTests(unittest.TestCase):
         rejected = reject[0] if reject else len(self.inputs)
         dispatched = [inputs['source_sha'] for inputs in self.inputs[:rejected]]
         replies = [data['body'] for path, data in calls if path.endswith('/issues/7/comments')]
+        self.reactions = [data['content'] for path, data in calls if path.endswith('/comments/99/reactions')]
         return dispatched, replies, error
+
+    def test_command_reacts_to_started_and_refused_commands(self):
+        sha = 'c' * 40
+        for body, permission, reactions in [(f'/hpc {sha}', 'write', ['rocket']), ('/hpc', 'write', ['confused']),
+                                            (f'/hpc {sha}', 'read', ['-1']), ('please run /hpc', 'write', [])]:
+            with self.subTest(body=body, permission=permission):
+                self.command(body, [sha], permission=permission)
+                self.assertEqual(self.reactions, reactions)
 
     def test_command_options_reach_every_dispatch_as_inputs(self):
         commits = ['a' * 40, 'c' * 40]

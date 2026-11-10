@@ -199,6 +199,7 @@ Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.
 Review each earlier commit on its own before naming it, a later commit can hide what an earlier one changes.
 If any hash is incomplete or names a commit outside the PR, nothing is dispatched.
+Reactions on the comment acknowledge it, a rocket for started runs, a confused face for an invalid command and a thumbs down for a commenter without write access.
 The reply names the authorized commits or the reasons for refusing.
 Results appear as check runs on each commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
 GitHub shows checks of earlier commits on the commit pages, not in the PR view.
