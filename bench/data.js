@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794810430906,
+  "lastUpdate": 1794831022809,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Julia linear solve": [
@@ -575,6 +575,35 @@ window.BENCHMARK_DATA = {
           {
             "name": "linear_solve_512",
             "value": 0.001860073,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "gerrit.pape@uni-paderborn.de",
+            "name": "Gerrit Pape",
+            "username": "papeg"
+          },
+          "committer": {
+            "email": "gerrit.pape@uni-paderborn.de",
+            "name": "Gerrit Pape",
+            "username": "papeg"
+          },
+          "distinct": true,
+          "id": "73ce0e78c7b51feca6fa1aa0d1d4cceb88f90beb",
+          "message": "make benchmark configuration more readable with extra yml file",
+          "timestamp": "2026-11-16T13:06:12+01:00",
+          "tree_id": "af94e8267ab8af35a2805c9b5db495ec10fc185d",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/73ce0e78c7b51feca6fa1aa0d1d4cceb88f90beb"
+        },
+        "date": 1794831022800,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "linear_solve_512",
+            "value": 0.001633325,
             "unit": "seconds"
           }
         ]
