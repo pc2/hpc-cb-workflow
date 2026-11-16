@@ -67,11 +67,10 @@ jobs:
           
           
           def run_gh(args, read, **options):
-              """Run gh, a read is repeated after network and server errors, a write is never repeated."""
+              """Run gh, a failed read is repeated, also after 404, which GitHub returns at times for existing runs, a write never."""
               for delay in (10, 20, 30, None):
                   result = subprocess.run(args, capture_output=True, **options)
-                  stderr = result.stderr if isinstance(result.stderr, str) else result.stderr.decode(errors='replace')
-                  if result.returncode == 0 or not read or delay is None or '(HTTP 4' in stderr:
+                  if result.returncode == 0 or not read or delay is None:
                       return result
                   time.sleep(delay)
           

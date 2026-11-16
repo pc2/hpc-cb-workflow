@@ -365,9 +365,9 @@ class BenchmarkTests(unittest.TestCase):
         self.assertIn(('repos/pc2/test/pulls', 'test-token'), requests)
         self.assertTrue(all(token is None for path, token in requests if '/git/' in path))
 
-    def test_only_reads_are_repeated_and_only_after_network_or_server_errors(self):
+    def test_failed_reads_are_repeated_and_writes_are_not(self):
         for stderr, read, calls in [('gh: Bad Gateway (HTTP 502)', True, 4), ('connection reset', True, 4),
-                                    ('gh: Not Found (HTTP 404)', True, 1), ('gh: Bad Gateway (HTTP 502)', False, 1)]:
+                                    ('gh: Not Found (HTTP 404)', True, 4), ('gh: Bad Gateway (HTTP 502)', False, 1)]:
             for module in (hpc_command, benchmark, integration_suite):
                 failed = subprocess.CompletedProcess([], 1, '', stderr)
                 with self.subTest(stderr=stderr, read=read, module=module.__name__), \
