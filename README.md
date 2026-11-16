@@ -38,10 +38,15 @@ GitLab operations use `pc2/github2lab_action`, all action references are pinned 
 
 ## Usage
 
+### Caller workflow
+
 The [manual example](examples/manual.yml) and [benchmark example](examples/benchmark.yml) are complete callers.
-Replace `REVIEWED_COMMIT` with the published workflow commit.
+Callers pin this workflow to a reviewed commit, since it runs with their secrets and write permissions.
+The examples in this repository cannot name their own commit, so they use the placeholder `REVIEWED_COMMIT`, replace it with the full hash of that commit.
+
 The four dispatch inputs are required, continuation dispatches the caller with `context_run_id` and the PR command dispatches it with `pull_request`, `source_sha` and `command_comment`.
 The workflow reads them from the dispatch, so the caller only declares them.
+
 The Actions form lists inputs in declaration order, so declare the caller's own options first.
 GitLab reads `.gitlab-ci.yml` from the mirrored commit, so it lives in the caller repository.
 
@@ -83,8 +88,11 @@ jobs:
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
 ```
 
+### Pipeline rule
+
 The GitLab pipeline must accept only triggers for the mirrored commit, otherwise jobs for another branch head can start.
 The workflow passes the selected commit as `EXPECTED_COMMIT_SHA`, the rule compares it with the commit GitLab runs.
+
 Two pushes to the default branch within seconds mirror different commits to the same GitLab branch, the rule then fails the older run instead of testing the wrong commit.
 
 ```yaml
@@ -94,6 +102,8 @@ workflow:
         $CI_PIPELINE_SOURCE == "trigger" &&
         $EXPECTED_COMMIT_SHA == $CI_COMMIT_SHA
 ```
+
+### Inputs and outputs
 
 | Input | Meaning |
 | --- | --- |
@@ -114,39 +124,70 @@ The `pipeline_status` output exposes the verified GitLab status after collection
 
 ## How it runs
 
+### Start
+
 Start force pushes the selected commit to the same branch on GitLab and triggers one pipeline.
 Only the first attempt of a new run may start a pipeline, reruns reuse the saved context artifact.
+
+The start job warns when the caller or its `context_run_id` input is missing on the default branch, continuation would fail there.
+Forks without `gitlab_project_id` skip the run, unsupported events such as `pull_request` fail with a message.
+
+### Monitoring
+
 Wait verifies the pipeline identity and mirrors job results as check runs named `HPC #<pipeline> / <job>`, the pipeline ID separates pipelines of the same commit.
 The pipeline check `HPC #<pipeline>` holds the job table and sorts before its job checks.
 Jobs of child pipelines in the same project appear as `<trigger job>/<job>`.
+
 GitLab outages up to thirty minutes are retried, an outage reaching `max_wait_minutes` hands over to the next run.
-After `max_wait_minutes` it dispatches the caller on the default branch again with `context_run_id`, so monitoring may outlast the six hour job limit.
-Continuation stops after seven days, the summary names the original run ID for a manual resume.
-The start job warns when the caller or its `context_run_id` input is missing on the default branch, continuation would fail there.
-Forks without `gitlab_project_id` skip the run, unsupported events such as `pull_request` fail with a message.
+
 A pipeline blocked by a manual job ends the monitoring with status `manual` and fails the run.
 Optional manual jobs do not block.
+
+### Continuation
+
+After `max_wait_minutes` the workflow dispatches the caller on the default branch again with `context_run_id`, so monitoring may outlast the six hour job limit.
+Continuation stops after seven days, the summary names the original run ID for a manual resume.
+
+### Collection
+
 Collect uploads the GitLab artifacts with a thirty day retention and posts one PR comment per pipeline.
 A PR run that fails before collection comments with the failed step instead.
 Child pipeline archives are named `<trigger job>_<job>.zip`.
+
 Collection fails when the pipeline fails or an artifact download fails, unless `expected_pipeline_status` requires the failure.
 Suites whose archive comes from a successful job are compared and recorded also when other jobs of the pipeline fail.
+
 A pipeline without artifacts passes, the summary reports the number of collected archives.
 `expire_in` must outlast the queue time of the following jobs, since collection starts after the whole pipeline.
 
+## Security
+
+### Who may start a run
+
 Only pushes to the default branch, manual dispatch and schedules run the workflow.
-Repository writers are trusted to authorize cluster execution because their workflows can access the GitLab secrets.
 The start job checks who started the run before anything is mirrored.
-Pushes, schedules and dispatches of the default branch without a PR run reviewed code and need no further check.
-Other dispatches require repository write access.
-A dispatch of the PR command passes its comment, its author needs repository write access and the comment must name the selected commit.
+
+| Trigger | Required check |
+| --- | --- |
+| Push to the default branch or schedule. | None, the code is reviewed. |
+| Dispatch of the default branch without a PR. | None, the code is reviewed. |
+| Any other dispatch. | The actor needs repository write access. |
+| Dispatch by the PR command. | The comment author needs repository write access and the comment must name the selected commit. |
+
 Pass `source_sha` and `pull_request` to run a reviewed commit of an open PR, including a fork commit, from the caller on the default branch.
+
+Repository writers are trusted to authorize cluster execution because their workflows can access the GitLab secrets.
 Users with write access can also run their own workflows on other branches, which receive the repository secrets, so grant write access only to trusted people.
+
+### What a run can access
+
 PR runs use the GitLab branch `hpc-pr-<number>-<sha>`, these branches remain on GitLab until pruned.
 Jobs run with the CI account's filesystem and scheduler permissions, there is no sandbox.
 GitLab tokens reach only the steps that use them, collected archives are stored without extraction.
 
 ## Benchmarks
+
+### Configuration
 
 Set `benchmark` to publish measurements with [github-action-benchmark][gab] after a successful pipeline.
 Each suite selects one file inside one collected GitLab job archive, `archive` is the GitLab job name with `.zip`.
@@ -171,16 +212,32 @@ benchmark: >-
 | `alert_threshold` | The warning ratio, `115%` by default, at least `100%`. |
 | `fail_threshold` | The failing ratio, `150%` by default, at least the warning ratio. |
 
+### Measurement files
+
 Custom formats contain a JSON array of objects with `name`, `unit` and `value`.
 The `julia` format reads the estimates exported by `BenchmarkTools.save`.
-New measurements extend a suite, measurements missing from the baseline or changed units fail the comparison.
+
+### Comparison
+
 The action compares against the latest recorded result of the suite from a different commit, it does not rerun the baseline.
-A run on the default branch must record the first baseline before PR or `compare` runs can succeed.
-The comparison appears in the job summary, a `HPC benchmark / <suite>` check and the PR comment.
+New measurements extend a suite, measurements missing from the baseline or changed units fail the comparison.
+
 Each measurement is marked `ok`, `warning` or `failure` by the thresholds, warnings keep the result successful and appear in the check title.
-PR measurements always compare without recording, runs from other branches fail unless `mode` is `compare`.
-Recording retries reuse the ledger stored with the history, comparison retries reuse a thirty day artifact, neither appends another measurement.
+The comparison appears in the job summary, a `HPC benchmark / <suite>` check and the PR comment.
+
+### Recording
+
+| Run | Behavior |
+| --- | --- |
+| Default branch | Compares and records, with `compare` it only compares. |
+| PR | Compares without recording. |
+| Other branch | Fails unless `mode` is `compare`. |
+| Retry | Reuses the ledger stored with the history or the thirty day comparison artifact, and appends no measurement. |
+
+A run on the default branch must record the first baseline before PR or `compare` runs can succeed.
 GitHub keeps one pending report per history branch, so avoid callers that record to the same branch at the same time.
+
+### GitHub Pages
 
 For `pages`, select GitHub Actions as the source under Settings, Pages, the dashboard is served below the directory, for example `/bench/`.
 This mode replaces whatever the repository publishes on Pages.
@@ -189,26 +246,49 @@ For an existing documentation site, use `history` and copy the directory from th
 ## PR command
 
 Reviewed PRs run with a comment `/hpc <commit> [<commit> ...]`.
-Copy the [command example](examples/command.yml) into the caller repository, set `workflow` to the caller's file name and replace `REVIEWED_COMMIT`.
+
+### Enabling the command
+
+Copy the [command example](examples/command.yml) into the caller repository, set `workflow` to the caller's file name and replace `REVIEWED_COMMIT` with the same commit as in the caller.
 GitHub starts comment workflows only in the commented repository, so this stub listens there and calls the command in this repository.
+
+### Commits and authorization
+
 Each commit requires its full 40 character hexadecimal hash and must belong to the PR.
 The full hash binds approval to the reviewed commit even if the PR changes before dispatch.
-It verifies the commenter's repository write access and dispatches the caller once per commit.
+
+The command verifies the commenter's repository write access and dispatches the caller once per commit.
 The start job checks the comment author for repository write access again.
+
 Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.
 Review each earlier commit on its own before naming it, a later commit can hide what an earlier one changes.
 If any hash is incomplete or names a commit outside the PR, nothing is dispatched.
-Reactions on the comment acknowledge it, a rocket for started runs, a confused face for an invalid command and a thumbs down for a commenter without write access.
+
+The same run can be dispatched by hand with `pull_request` and `source_sha`.
+
+### Feedback
+
+A reaction on the comment acknowledges it.
+
+| Reaction | Meaning |
+| --- | --- |
+| 🚀 | The runs were started. |
+| 😕 | The command is invalid. |
+| 👎 | The commenter has no repository write access. |
+
 The reply names the authorized commits or the reasons for refusing.
 Results appear as check runs on each commit, one PR comment per pipeline and one `HPC benchmark / <suite>` check per suite.
 GitHub shows checks of earlier commits on the commit pages, not in the PR view.
-The same run can be dispatched by hand with `pull_request` and `source_sha`.
+
+### Options
 
 Options after the commits select what runs, `/hpc <commit> suite=gpu` applies to all named commits.
 Each option is a `workflow_dispatch` input of the caller with the same name, so the comment and the Actions form use the same names.
+
 Options grant nothing beyond a manual dispatch, which repository writers can start anyway.
 The command refuses `pull_request`, `source_sha`, `context_run_id` and `command_comment`, values allow letters, digits and `._:/+-`.
+
 GitHub rejects inputs the caller does not declare, and the reply relays the rejection.
 Declare options as `type: choice` to restrict their values, and forward them explicitly as pipeline variables.
 
@@ -236,6 +316,9 @@ Free text inputs, for example several suites joined by `+`, need a pattern, othe
 ```
 
 A value outside its pattern stops the run before anything is pushed to GitLab.
+
+### Selecting checks and benchmarks
+
 Only suites whose archive was collected start a benchmark job, collection notes the others in its summary.
 The [benchmark example](examples/benchmark.yml) selects validation and benchmark jobs separately, each suite reads the archive of its benchmark job.
 
@@ -257,17 +340,24 @@ bench-gpu:
 
 A run with `checks=none` and `benchmarks=gpu` then measures only the GPU suite.
 A missing file inside a collected archive fails the suite.
+
 Continuation runs keep the variables and benchmark configuration of the original start.
 
 ## Development
+
+### Unit tests
 
 `tests/` runs with mocked API responses and the pinned action revision, `GITHUB2LAB_SOURCE` selects a local action checkout.
 Reusable workflows embed the Python helpers from `scripts/`, run `python scripts/embed_helpers.py` after editing them and commit the generated workflows.
 The benchmark action checks run the pinned action against deterministic improvement, warning and failure measurements.
 
+### Integration suite
+
 The integration suite runs against the configured GitLab project on pushes to `main`, weekly and on dispatch.
 Its [pipeline](.gitlab-ci.yml) needs a runner tagged `otus-shell` and a Slurm runner tagged `otus-slurm`, override the tags with `INTEGRATION_RUNNER_TAG` and `BENCHMARK_RUNNER_TAG` in the GitLab project variables.
+
 The `benchmark` scenario measures a Julia dense linear solve on Slurm, `BENCHMARK_SCHEDULER_PARAMETERS` and `BENCHMARK_JULIA_MODULE` adjust the allocation and module.
+
 The [history workflow](.github/workflows/benchmark-history.yml) publishes the same measurement to Pages on pushes, weekly and on dispatch.
 A failing suite still records its point, Pages are redeployed from the branch regardless of the verdict.
 
@@ -281,8 +371,11 @@ A failing suite still records its point, Pages are redeployed from the branch re
 
 The continuation path runs from the default branch, merge changes to it before testing `handover`.
 
+### PR command test
+
 The PR command test creates passing and failing draft PRs, posts `/hpc <commit>`, verifies continuation, reports and retries, then closes the PRs.
 It also verifies that an undeclared option is refused and that a declared option reaches the run.
+
 It needs the following settings in this repository.
 
 | Setting | Type | Value |
