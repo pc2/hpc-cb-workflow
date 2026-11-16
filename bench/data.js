@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794801822680,
+  "lastUpdate": 1794830905680,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Regression fixture": [
@@ -507,6 +507,33 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/pc2/hpc-cb-workflow/commit/96c7e8866b9be6977f60fc6dfc29b9833f364d7b"
         },
         "date": 1794801822668,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "controlled measurement",
+            "value": 100,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "committer": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "id": "73ce0e78c7b51feca6fa1aa0d1d4cceb88f90beb",
+          "message": "make benchmark configuration more readable with extra yml file",
+          "timestamp": "2026-11-16T12:06:12Z",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/73ce0e78c7b51feca6fa1aa0d1d4cceb88f90beb"
+        },
+        "date": 1794830905668,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
