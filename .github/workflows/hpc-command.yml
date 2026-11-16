@@ -33,14 +33,25 @@ jobs:
           import os
           import re
           import subprocess
+          import time
+          
+          
+          def run_gh(args, read, **options):
+              """Run gh, a read is repeated after network and server errors, a write is never repeated."""
+              for delay in (10, 20, 30, None):
+                  result = subprocess.run(args, capture_output=True, **options)
+                  stderr = result.stderr if isinstance(result.stderr, str) else result.stderr.decode(errors='replace')
+                  if result.returncode == 0 or not read or delay is None or '(HTTP 4' in stderr:
+                      return result
+                  time.sleep(delay)
           
           
           def api(path, body=None):
               args = ['gh', 'api', '-H', 'X-GitHub-Api-Version: 2026-03-10', path]
               if body is not None:
                   args += ['--method', 'POST', '--input', '-']
-              result = subprocess.run(args, input=json.dumps(body) if body is not None else None,
-                                      text=True, capture_output=True, check=True, timeout=60)
+              result = run_gh(args, body is None, input=json.dumps(body) if body is not None else None, text=True, timeout=60)
+              result.check_returncode()
               return json.loads(result.stdout) if result.stdout else None
           
           

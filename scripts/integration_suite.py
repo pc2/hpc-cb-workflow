@@ -8,19 +8,24 @@ import time
 import zipfile
 
 
+def run_gh(args, read, **options):
+    """Run gh, a read is repeated after network and server errors, a write is never repeated."""
+    for delay in (10, 20, 30, None):
+        result = subprocess.run(args, capture_output=True, **options)
+        stderr = result.stderr if isinstance(result.stderr, str) else result.stderr.decode(errors='replace')
+        if result.returncode == 0 or not read or delay is None or '(HTTP 4' in stderr:
+            return result
+        time.sleep(delay)
+
+
 def api(path, body=None):
     command = ['gh', 'api', '-H', 'X-GitHub-Api-Version: 2026-03-10', path]
     if body is not None:
         command += ['--method', 'POST', '--input', '-']
-    # Only reads are repeated, a repeated dispatch would start a second run.
-    for attempt in range(1 if body is not None else 4):
-        if attempt:
-            time.sleep(10 * attempt)
-        result = subprocess.run(command, input=json.dumps(body) if body is not None else None,
-                                text=True, capture_output=True, timeout=60)
-        if result.returncode == 0:
-            return json.loads(result.stdout)
-    raise RuntimeError(f'GitHub API request {path} failed.\n{result.stderr.strip()}')
+    result = run_gh(command, body is None, input=json.dumps(body) if body is not None else None, text=True, timeout=60)
+    if result.returncode:
+        raise RuntimeError(f'GitHub API request {path} failed.\n{result.stderr.strip()}')
+    return json.loads(result.stdout)
 
 
 def items(path, key):
@@ -38,8 +43,8 @@ def artifact(repo, run_id, name):
                if a['name'] == name and not a['expired']]
     if len(matches) != 1:
         raise RuntimeError(f'Expected one {name} artifact in run {run_id}.')
-    result = subprocess.run(['gh', 'api', f'repos/{repo}/actions/artifacts/{matches[0]["id"]}/zip'],
-                            capture_output=True, check=True, timeout=120)
+    result = run_gh(['gh', 'api', f'repos/{repo}/actions/artifacts/{matches[0]["id"]}/zip'], True, timeout=120)
+    result.check_returncode()
     return zipfile.ZipFile(io.BytesIO(result.stdout))
 
 

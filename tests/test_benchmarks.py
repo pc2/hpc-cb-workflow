@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import benchmark_support as benchmark
 import hpc_command
 import embed_helpers
+import integration_suite
 import pr_integration
 import select_suites
 
@@ -363,6 +364,22 @@ class BenchmarkTests(unittest.TestCase):
                 pr_integration.run(Path(directory) / 'state.json')
         self.assertIn(('repos/pc2/test/pulls', 'test-token'), requests)
         self.assertTrue(all(token is None for path, token in requests if '/git/' in path))
+
+    def test_only_reads_are_repeated_and_only_after_network_or_server_errors(self):
+        for stderr, read, calls in [('gh: Bad Gateway (HTTP 502)', True, 4), ('connection reset', True, 4),
+                                    ('gh: Not Found (HTTP 404)', True, 1), ('gh: Bad Gateway (HTTP 502)', False, 1)]:
+            for module in (hpc_command, benchmark, integration_suite):
+                failed = subprocess.CompletedProcess([], 1, '', stderr)
+                with self.subTest(stderr=stderr, read=read, module=module.__name__), \
+                        patch.object(module.subprocess, 'run', return_value=failed) as run, \
+                        patch.object(module.time, 'sleep') as sleep:
+                    self.assertEqual(module.run_gh(['gh'], read, text=True).returncode, 1)
+                    self.assertEqual(run.call_count, calls)
+                    self.assertEqual([call.args[0] for call in sleep.call_args_list], [10, 20, 30][:calls - 1])
+        recovered = [subprocess.CompletedProcess([], 1, b'', b'timeout'), subprocess.CompletedProcess([], 0, b'data', b'')]
+        with patch.object(integration_suite.subprocess, 'run', side_effect=recovered), \
+                patch.object(integration_suite.time, 'sleep'):
+            self.assertEqual(integration_suite.run_gh(['gh'], True).stdout, b'data')
 
     def test_reusable_workflows_embed_the_tested_helpers(self):
         embedded = {}

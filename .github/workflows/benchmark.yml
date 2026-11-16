@@ -58,6 +58,7 @@ jobs:
           from pathlib import Path, PurePosixPath
           import re
           import subprocess
+          import time
           import zipfile
           
           
@@ -65,12 +66,22 @@ jobs:
               return subprocess.check_output(args, text=True).strip()
           
           
+          def run_gh(args, read, **options):
+              """Run gh, a read is repeated after network and server errors, a write is never repeated."""
+              for delay in (10, 20, 30, None):
+                  result = subprocess.run(args, capture_output=True, **options)
+                  stderr = result.stderr if isinstance(result.stderr, str) else result.stderr.decode(errors='replace')
+                  if result.returncode == 0 or not read or delay is None or '(HTTP 4' in stderr:
+                      return result
+                  time.sleep(delay)
+          
+          
           def api(path, body=None, method=None):
               args = ['gh', 'api', '-H', 'X-GitHub-Api-Version: 2026-03-10', path]
               if body is not None:
                   args += ['--method', method or 'POST', '--input', '-']
-              result = subprocess.run(args, input=json.dumps(body) if body is not None else None,
-                                      text=True, capture_output=True, check=True, timeout=60)
+              result = run_gh(args, body is None, input=json.dumps(body) if body is not None else None, text=True, timeout=60)
+              result.check_returncode()
               return json.loads(result.stdout) if result.stdout.strip() else None
           
           
@@ -169,8 +180,8 @@ jobs:
                   artifacts = api(f'repos/{repo}/actions/runs/{run}/artifacts?per_page=100')['artifacts']
                   receipt = next((a for a in artifacts if a['name'] == receipt_name and not a['expired']), None)
                   if receipt:
-                      response = subprocess.run(['gh', 'api', f'repos/{repo}/actions/artifacts/{receipt["id"]}/zip'],
-                                                capture_output=True, check=True, timeout=60)
+                      response = run_gh(['gh', 'api', f'repos/{repo}/actions/artifacts/{receipt["id"]}/zip'], True, timeout=60)
+                      response.check_returncode()
                       with zipfile.ZipFile(io.BytesIO(response.stdout)) as saved:
                           previous = json.loads(saved.read('receipt.json'))
                       if previous['key'] != key or previous['sha'] != context['sha']:

@@ -9,7 +9,7 @@ import subprocess
 import time
 from urllib.parse import quote
 
-from integration_suite import artifact, items
+from integration_suite import artifact, items, run_gh
 
 
 def api(path, body=None, method=None, token=None):
@@ -18,9 +18,9 @@ def api(path, body=None, method=None, token=None):
         args += ['--input', '-']
     if method or body is not None:
         args += ['--method', method or 'POST']
-    result = subprocess.run(args, input=json.dumps(body) if body is not None else None,
-                            env=dict(os.environ, GH_TOKEN=token or os.environ['GH_TOKEN']),
-                            text=True, capture_output=True, timeout=60)
+    result = run_gh(args, body is None and method in (None, 'GET'),
+                    input=json.dumps(body) if body is not None else None,
+                    env=dict(os.environ, GH_TOKEN=token or os.environ['GH_TOKEN']), text=True, timeout=60)
     if result.returncode:
         details = '\n'.join(part.strip() for part in (result.stderr, result.stdout) if part.strip())
         for secret in (token, os.environ.get('GH_TOKEN'), os.environ.get('CB_TEST_TOKEN')):
