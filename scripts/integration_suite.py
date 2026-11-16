@@ -12,9 +12,15 @@ def api(path, body=None):
     command = ['gh', 'api', '-H', 'X-GitHub-Api-Version: 2026-03-10', path]
     if body is not None:
         command += ['--method', 'POST', '--input', '-']
-    result = subprocess.run(command, input=json.dumps(body) if body is not None else None,
-                            text=True, capture_output=True, check=True, timeout=60)
-    return json.loads(result.stdout)
+    # Only reads are repeated, a repeated dispatch would start a second run.
+    for attempt in range(1 if body is not None else 4):
+        if attempt:
+            time.sleep(10 * attempt)
+        result = subprocess.run(command, input=json.dumps(body) if body is not None else None,
+                                text=True, capture_output=True, timeout=60)
+        if result.returncode == 0:
+            return json.loads(result.stdout)
+    raise RuntimeError(f'GitHub API request {path} failed.\n{result.stderr.strip()}')
 
 
 def items(path, key):
