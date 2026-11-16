@@ -1,9 +1,11 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 import yaml
@@ -61,7 +63,7 @@ for stub_path, target, workflow_file in [('.github/workflows/pr-command.yml', '.
     assert stub['jobs']['hpc']['if'] == "github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')"
 example_suites = yaml.safe_load((root / 'examples/hpc-benchmark.yml').read_text())['suites']
 assert yaml.safe_load((root / 'examples/benchmark.yml').read_text())['jobs']['hpc']['with']['benchmark_file'] == '.github/hpc-benchmark.yml'
-assert all(isinstance(value, str) for suite in example_suites for values in suite['matrix'].values() for value in values)
+assert all('match' in suite for suite in example_suites)
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
     assert not {'context_run_id', 'pull_request', 'source_sha', 'command_comment'} & set(forwarded), example
@@ -114,7 +116,11 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert history['on']['push'] == {'branches': ['main']}
     assert history['jobs']['benchmark']['uses'] == './.github/workflows/hpc-pipeline.yml'
     assert history['jobs']['benchmark']['with']['benchmark_file'] == '.github/hpc-benchmark.yml'
-    assert yaml.safe_load((root / '.github/hpc-benchmark.yml').read_text())['mode'] == 'pages'
+    configuration = yaml.safe_load((root / '.github/hpc-benchmark.yml').read_text())
+    assert configuration['mode'] == 'pages' and configuration['suites'][0]['match'] == 'Linear *'
+    assert 'hpc-benchmarks/' in gitlab_ci['benchmark']['artifacts']['paths']
+    assert 'open("hpc-benchmarks/Linear solve.json"' in (root / 'benchmarks/linear_solve.jl').read_text()
+    assert configuration['suites'][1]['matrix'] == {'statistic': ['median', 'minimum']}
     assert 'results/' in gitlab_ci['quick']['artifacts']['paths']
 assert jobs['wait']['timeout-minutes'] == '345'
 assert jobs['collect']['timeout-minutes'] == '${{ fromJSON(inputs.collect_timeout_minutes) }}'
@@ -686,6 +692,63 @@ suites:
         assert result.returncode == 0 and json.loads(output.read_text().removeprefix('suites=')) == []
 
     test_benchmarks_start_only_for_suites_whose_archive_comes_from_a_successful_job()
+
+    def test_suite_rules_take_their_suites_from_the_archives_of_successful_jobs():
+        resolve = by_name['Resolve benchmark configuration']['run']
+        select = by_name['Select benchmark suites']['run']
+        rules = [{'match': '* PID', 'alert_threshold': '130%'},
+                 {'match': '*', 'tool': 'customBiggerIsBetter'}]
+        explicit = {'name': 'GPU', 'archive': 'gpu.zip', 'file': 'benchmark.json'}
+        config = {'mode': 'pages', 'suites': rules + [explicit]}
+        result = run(resolve, {'BENCHMARK': json.dumps(config), 'BENCHMARK_FILE': ''})
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert json.loads(output.read_text().removeprefix('config=')) == config
+        for suite, message in [({'match': 'CPU [ab]'}, 'only wildcard'), ({'match': 7}, 'only wildcard'),
+                               ({'match': '*', 'archive': 'cpu.zip'}, 'must not set')]:
+            result = run(resolve, {'BENCHMARK': json.dumps({'suites': [suite]}), 'BENCHMARK_FILE': ''})
+            assert result.returncode != 0 and '::error::' in result.stdout and message in result.stdout, (suite, result.stdout)
+
+        archives = fixture / 'discovery-archives'
+        shutil.rmtree(archives, ignore_errors=True)
+        archives.mkdir()
+        def archive(name, members):
+            with zipfile.ZipFile(archives / name, 'w') as target:
+                for member in members:
+                    target.writestr(member, '[]')
+        archive('scaling_[1.13].zip', ['hpc-benchmarks/Threads 1.13 PID.json', 'hpc-benchmarks/Threads 1.13 efficiency.json',
+                                       'hpc-benchmarks/nested/ignored.json', 'results/hpc-benchmarks/ignored.json'])
+        archive('failed.zip', ['hpc-benchmarks/Broken PID.json'])
+        archive('gpu.zip', ['benchmark.json'])
+        status_file = fixture / 'artifact-status.json'
+        status_file.write_text(json.dumps({'scaling_[1.13].zip': 'success', 'failed.zip': 'failed',
+                                           'gpu.zip': 'success', 'absent.zip': 'success'}))
+        environment = {'SUITES': json.dumps(config['suites']), 'STATUS_FILE': str(status_file), 'ARTIFACTS': str(archives)}
+        result = run(select, environment)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert json.loads(output.read_text().removeprefix('suites=')) == [
+            explicit,
+            {'alert_threshold': '130%', 'name': 'Threads 1.13 PID', 'archive': 'scaling_[1.13].zip',
+             'file': 'hpc-benchmarks/Threads 1.13 PID.json'},
+            {'tool': 'customBiggerIsBetter', 'name': 'Threads 1.13 efficiency', 'archive': 'scaling_[1.13].zip',
+             'file': 'hpc-benchmarks/Threads 1.13 efficiency.json'}]
+        assert summary.read_text() == ('Benchmark suite Threads 1.13 PID found in archive scaling_[1.13].zip, rule * PID.\n'
+                                       'Benchmark suite Threads 1.13 efficiency found in archive scaling_[1.13].zip, rule *.\n'
+                                       'Found 2 written benchmark suites in 2 archives of successful jobs.\n')
+        assert 'Benchmark suite GPU selected, file benchmark.json of archive gpu.zip.' in result.stdout
+        result = run(select, environment | {'SUITES': json.dumps([explicit])})
+        assert result.returncode == 0 and json.loads(output.read_text().removeprefix('suites=')) == [explicit]
+        for members, suites, message in [(['hpc-benchmarks/Threads 1.13 PID.json'], rules, 'defined more than once'),
+                                         (['hpc-benchmarks/GPU.json'], config['suites'], 'defined more than once'),
+                                         (['hpc-benchmarks/Other.json'], rules[:1], 'No suite rule matches'),
+                                         (['hpc-benchmarks/_hidden.json'], rules, 'invalid suite name'),
+                                         ([f'hpc-benchmarks/Case {index}.json' for index in range(99)], rules, 'at most 100')]:
+            archive('second.zip', members)
+            status_file.write_text(json.dumps({'scaling_[1.13].zip': 'success', 'second.zip': 'success'}))
+            result = run(select, environment | {'SUITES': json.dumps(suites)})
+            assert result.returncode != 0 and '::error::' in result.stdout and message in result.stdout, (members, result.stdout)
+            assert output.read_text() == ''
+
+    test_suite_rules_take_their_suites_from_the_archives_of_successful_jobs()
 
     def test_runs_failing_before_collection_are_reported_to_the_pr():
         collect = jobs['collect']

@@ -31,8 +31,14 @@ function benchmark()
         @printf(output, "\"sha\":\"%s\",\"julia_version\":\"%s\",\"threads\":1,\"blas_threads\":1,", sha, VERSION)
         @printf(output, "\"cpu\":%s,\"blas\":%s}\n", repr(Sys.CPU_NAME), repr(string(BLAS.get_config())))
     end
-    open("results/benchmark-action.json", "w") do output
+    mkpath("hpc-benchmarks")
+    open("hpc-benchmarks/Linear solve.json", "w") do output
         @printf(output, "[{\"name\":\"linear_solve_512\",\"unit\":\"seconds\",\"value\":%.17g}]\n", median(samples))
+    end
+    for (statistic, value) in (("median", median(samples)), ("minimum", minimum(samples)))
+        open("results/linear-solve-$statistic.json", "w") do output
+            @printf(output, "[{\"name\":\"linear_solve_512\",\"unit\":\"seconds\",\"value\":%.17g}]\n", value)
+        end
     end
     println("Median linear solve time, ", median(samples), " seconds.")
 end

@@ -191,7 +191,7 @@ Users with write access can also run their own workflows on other branches, whic
 
 PR runs use the GitLab branch `hpc-pr-<number>-<sha>`, these branches remain on GitLab until pruned.
 Jobs run with the CI account's filesystem and scheduler permissions, there is no sandbox.
-GitLab tokens reach only the steps that use them, collected archives are stored without extraction.
+GitLab tokens reach only the steps that use them, collected archives are stored without extraction, the search for written suites reads only their file names.
 
 ## Benchmarks
 
@@ -204,43 +204,97 @@ The file lives in the caller repository, for example [.github/hpc-benchmark.yml]
 mode: history
 branch: hpc-results
 suites:
+  - match: "* time"
+    alert_threshold: 115%
+    fail_threshold: 150%
+  - match: "* efficiency"
+    tool: customBiggerIsBetter
+```
+
+The configuration runs nothing, the jobs are defined in `.gitlab-ci.yml` and selected by the pipeline variables.
+The workflow reads the file from the commit of the caller workflow, not from the selected commit, so a PR cannot change its own thresholds.
+Small configurations can be passed inline as JSON with `benchmark` instead, with the same keys.
+
+#### Suites written by the jobs
+
+A GitLab job publishes a suite by writing its measurements to `hpc-benchmarks/<suite name>.json` in its artifacts, in one of the [measurement formats](#measurement-files).
+
+```yaml
+benchmark:
+  script:
+    - mkdir -p hpc-benchmarks
+    - ./benchmark > "hpc-benchmarks/$DEVICE time.json"
+  artifacts:
+    paths: [hpc-benchmarks/]
+```
+
+A suite with `match` is a rule, it sets the keys below for every written suite whose name fits the pattern, `*` stands for any text.
+The first fitting rule applies, a written suite without a rule fails the collection.
+
+Only archives of successful jobs are searched, and only for files directly in `hpc-benchmarks/` at the top of the archive.
+Rules apply only when the configuration has at least one, otherwise these files are ignored.
+
+The suite names come from the selected commit, the thresholds and the tool from the caller commit.
+A PR run fails for a suite without a recorded baseline, so a renamed suite cannot pass unnoticed, a suite that is no longer written is not compared.
+At most 100 written suites are supported.
+
+#### Suites named in the configuration
+
+A suite with `name`, `archive` and `file` selects one file inside one collected archive, for jobs that cannot write to `hpc-benchmarks/`.
+`archive` is the GitLab job name with `.zip`, where `:` is dropped and a space becomes `_`, so the matrix job `bench: [gpu]` is collected as `bench_[gpu].zip`.
+
+```yaml
+suites:
   - name: "{device} {julia}"
     archive: bench-{device}{julia}.zip
     file: results/benchmark.json
-    alert_threshold: 115%
-    fail_threshold: 150%
     matrix:
       device: [cpu, gpu]
       julia: ["1.10", "1.13"]
 ```
 
-The configuration runs nothing, the jobs are defined in `.gitlab-ci.yml` and selected by the pipeline variables.
-Each suite selects one file inside one collected GitLab job archive, `archive` is the GitLab job name with `.zip`.
-
 A suite with a `matrix` becomes one suite per combination of its values, `{name}` in the other keys is replaced by the value of that name.
 Matrix values are quoted strings, YAML would read an unquoted `1.10` as the number `1.1`.
 Quote values that start with a placeholder, and use every placeholder in `name`, since suite names must be unique.
 
-The workflow reads the file from the commit of the caller workflow, not from the selected commit, so a PR cannot change its own thresholds.
-Small configurations can be passed inline as JSON with `benchmark` instead, with the same keys.
+Both kinds of suites can be mixed in one configuration.
+
+#### Keys
 
 | Key | Meaning |
 | --- | --- |
 | `mode` | `history` records on the branch, `pages` also deploys it with GitHub Pages, `compare` only checks. |
 | `branch` | The history branch, `hpc-results` by default, created on the first recording run. |
+| `match` | The name pattern of a rule for suites written by the jobs. |
 | `name` | The stable suite name, letters, digits, spaces, dots, underscores and hyphens, use separate suites for different hardware, versions or thread counts. |
-| `archive` | The GitLab job artifact archive. |
-| `file` | The measurement file inside the archive. |
+| `archive` | The GitLab job artifact archive of a named suite. |
+| `file` | The measurement file inside the archive of a named suite. |
 | `tool` | `customSmallerIsBetter` by default, `customBiggerIsBetter` or `julia`. |
 | `directory` | The dashboard directory on the branch, `bench` by default. |
 | `alert_threshold` | The warning ratio, `115%` by default, at least `100%`. |
 | `fail_threshold` | The failing ratio, `150%` by default, at least the warning ratio. |
-| `matrix` | Optional lists of values by placeholder name, see above. |
+| `matrix` | Optional lists of values by placeholder name for a named suite. |
 
 ### Measurement files
 
-Custom formats contain a JSON array of objects with `name`, `unit` and `value`.
+A measurement file must have a format of [github-action-benchmark][gab], selected by `tool`.
+The workflow supports the two custom formats and `julia`.
+
+The custom formats contain a JSON array with one object per metric.
+
+```json
+[
+  {"name": "solve/threads=8", "unit": "s", "value": 0.0018},
+  {"name": "solve/threads=24", "unit": "s", "value": 0.0007}
+]
+```
+
+`name` and `unit` are nonempty texts and `name` is unique in the file, `value` is a finite number that is not negative.
+With `customSmallerIsBetter`, the default, a larger value is a regression, with `customBiggerIsBetter` a smaller one.
+The optional keys `range` and `extra` of the action are passed on.
+
 The `julia` format reads the estimates exported by `BenchmarkTools.save`.
+A file may hold at most twenty megabytes.
 
 ### Comparison
 
@@ -344,8 +398,8 @@ A value outside its pattern stops the run before anything is pushed to GitLab.
 
 ### Selecting checks and benchmarks
 
-Only suites whose archive was collected start a benchmark job, collection notes the others in its summary.
-The [benchmark example](examples/benchmark.yml) selects validation and benchmark jobs separately, each suite reads the archive of its benchmark job.
+Only suites of successful jobs start a benchmark job, so the jobs that ran decide what is measured.
+The [benchmark example](examples/benchmark.yml) selects validation and benchmark jobs separately, each benchmark job writes its own suite.
 
 ```yaml
 variables:
@@ -359,12 +413,15 @@ test-gpu:
 bench-gpu:
   rules:
     - if: $BENCHMARKS =~ /(^|\+)(all|gpu)(\+|$)/
+  script:
+    - mkdir -p hpc-benchmarks
+    - ./benchmark > "hpc-benchmarks/gpu benchmark.json"
   artifacts:
-    paths: [results/benchmark.json]
+    paths: [hpc-benchmarks/]
 ```
 
 A run with `checks=none` and `benchmarks=gpu` then measures only the GPU suite.
-A missing file inside a collected archive fails the suite.
+For a named suite, collection notes a missing archive in its summary, and a missing file inside a collected archive fails the suite.
 
 Continuation runs keep the variables and benchmark configuration of the original start.
 

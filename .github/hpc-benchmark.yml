@@ -1,10 +1,13 @@
 mode: pages
 branch: hpc-results
 suites:
-  - name: "Linear {case}"
+  - match: "Linear *"
+    alert_threshold: 200%
+    fail_threshold: 1000%
+  - name: "Solve {statistic}"
     archive: benchmark.zip
-    file: results/benchmark-action.json
+    file: results/linear-solve-{statistic}.json
     alert_threshold: 200%
     fail_threshold: 1000%
     matrix:
-      case: [solve]
+      statistic: [median, minimum]

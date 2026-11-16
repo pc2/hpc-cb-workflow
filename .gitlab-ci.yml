@@ -71,7 +71,7 @@ benchmark:
     - module load "$BENCHMARK_JULIA_MODULE"
     - julia --startup-file=no --threads=1 benchmarks/linear_solve.jl
   artifacts:
-    paths: [results/]
+    paths: [results/, hpc-benchmarks/]
     expire_in: 30 days
 
 regression:

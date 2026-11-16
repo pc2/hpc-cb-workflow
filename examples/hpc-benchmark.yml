@@ -1,10 +1,6 @@
 mode: history
 branch: hpc-results
 suites:
-  - name: "{device} benchmark"
-    archive: bench-{device}.zip
-    file: results/benchmark.json
+  - match: "* benchmark"
     alert_threshold: 115%
     fail_threshold: 150%
-    matrix:
-      device: [cpu, gpu]
