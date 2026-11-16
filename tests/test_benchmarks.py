@@ -13,9 +13,38 @@ import benchmark_support as benchmark
 import hpc_command
 import embed_helpers
 import pr_integration
+import select_suites
 
 
 class BenchmarkTests(unittest.TestCase):
+    def test_written_suites_need_a_valid_unique_name_and_a_rule(self):
+        rules = [{'match': '* PID', 'alert_threshold': '130%'}, {'match': '* efficiency'}]
+        named = {'name': 'GPU', 'archive': 'gpu.zip', 'file': 'benchmark.json'}
+        with tempfile.TemporaryDirectory() as directory:
+            def archive(name, members):
+                with zipfile.ZipFile(Path(directory) / name, 'w') as target:
+                    for member in members:
+                        target.writestr(member, '[]')
+            archive('first.zip', ['hpc-benchmarks/CPU PID.json'])
+            statuses = {'first.zip': 'success', 'second.zip': 'success', 'gpu.zip': 'failed'}
+            archive('second.zip', ['hpc-benchmarks/CPU efficiency.json', 'results/hpc-benchmarks/ignored.json'])
+            selected, notes = select_suites.select(rules + [named], statuses, directory)
+            self.assertEqual(selected, [
+                {'alert_threshold': '130%', 'name': 'CPU PID', 'archive': 'first.zip', 'file': 'hpc-benchmarks/CPU PID.json'},
+                {'name': 'CPU efficiency', 'archive': 'second.zip', 'file': 'hpc-benchmarks/CPU efficiency.json'}])
+            self.assertEqual(notes[0], 'Benchmark suite GPU skipped, the job of archive gpu.zip finished with failed.')
+            self.assertEqual(notes[-1], 'Found 2 written benchmark suites in 2 archives of successful jobs.')
+            self.assertEqual(select_suites.select([named], statuses | {'gpu.zip': 'success'}, directory), ([named], []))
+            for members, suites, message in [(['hpc-benchmarks/CPU PID.json'], rules, 'defined more than once'),
+                                             (['hpc-benchmarks/GPU.json'], rules + [named], 'defined more than once'),
+                                             (['hpc-benchmarks/Other.json'], rules, 'No suite rule matches'),
+                                             (['hpc-benchmarks/_hidden PID.json'], rules, 'invalid suite name'),
+                                             ([f'hpc-benchmarks/Case {index} PID.json' for index in range(100)], rules,
+                                              'at most 100')]:
+                archive('second.zip', members)
+                with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                    select_suites.select(suites, statuses, directory)
+
     def test_api_failures_include_github_validation_details_without_credentials(self):
         cases = [
             ('gh: Resource not accessible by personal access token (HTTP 403)',
@@ -336,9 +365,22 @@ class BenchmarkTests(unittest.TestCase):
         self.assertTrue(all(token is None for path, token in requests if '/git/' in path))
 
     def test_reusable_workflows_embed_the_tested_helpers(self):
-        for template in (embed_helpers.ROOT / '.github/templates').glob('*.yml'):
-            self.assertEqual(embed_helpers.render(template),
-                             (embed_helpers.ROOT / '.github/workflows' / template.name).read_text())
+        embedded = {}
+        for workflow in (embed_helpers.ROOT / '.github/workflows').glob('*.yml'):
+            text = workflow.read_text()
+            self.assertEqual(embed_helpers.render(text), text, workflow.name)
+            for helper in ('benchmark_support.py', 'hpc_command.py', 'select_suites.py'):
+                if f'# BEGIN EMBED {helper}' in text:
+                    embedded[helper] = workflow.name
+                    source = (embed_helpers.ROOT / 'scripts' / helper).read_text().splitlines()[-1]
+                    self.assertIn(source, text)
+        self.assertEqual(embedded, {'benchmark_support.py': 'benchmark.yml', 'hpc_command.py': 'hpc-command.yml',
+                                    'select_suites.py': 'hpc-pipeline.yml'})
+        stale = '  # BEGIN EMBED hpc_command.py\n  outdated\n  # END EMBED hpc_command.py\n'
+        self.assertNotIn('outdated', embed_helpers.render(stale))
+        self.assertIn('  def ', embed_helpers.render(stale))
+        with self.assertRaisesRegex(ValueError, 'Missing the line'):
+            embed_helpers.render('# BEGIN EMBED hpc_command.py\n')
 
     def test_recording_retry_preserves_verdict_without_writing_history(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -26,6 +26,7 @@ jobs:
           CB_COMMAND_WORKFLOW: ${{ inputs.workflow }}
         run: |
           python3 - <<'PY'
+          # BEGIN EMBED hpc_command.py
           """Authorize a reviewed PR commit and dispatch its HPC caller."""
           
           import json
@@ -161,4 +162,5 @@ jobs:
           
           if __name__ == '__main__':
               main()
+          # END EMBED hpc_command.py
           PY

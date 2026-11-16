@@ -680,7 +680,6 @@ jobs:
           compression-level: 0
       # Only suites whose archive comes from a successful job start a benchmark job, also when other jobs of the pipeline failed.
       # Jobs may upload artifacts on failure, so the job status decides, and the step runs only after all archives were downloaded and uploaded.
-      # Rules with a match take their suites from the files hpc-benchmarks/<suite name>.json of these archives, only the member names are read.
       - name: Select benchmark suites
         id: suites
         if: env.FINISHED == 'true'
@@ -690,13 +689,10 @@ jobs:
           STATUS_FILE: ${{ runner.temp }}/hpc-artifact-status.json
           ARTIFACTS: ${{ runner.temp }}/hpc-artifacts
         run: |
-          set -euo pipefail
-          explicit=$(jq -c '[.[] | select(has("match") | not)]' <<< "$SUITES")
-          selected=$(jq -c --slurpfile statuses "$STATUS_FILE" '[.[] | select($statuses[0][.archive] == "success")]' <<< "$explicit")
-          jq -r --slurpfile statuses "$STATUS_FILE" '.[] | $statuses[0][.archive] as $status | select($status != "success")
-            | if $status == null then "Benchmark suite \(.name) skipped, this run collected no archive \(.archive)."
-              else "Benchmark suite \(.name) skipped, the job of archive \(.archive) finished with \($status)." end' <<< "$explicit" >> "$GITHUB_STEP_SUMMARY"
-          discovered=$(python3 -I - <<'PY'
+          python3 -I - <<'PY'
+          # BEGIN EMBED select_suites.py
+          """Select the benchmark suites of a finished pipeline from its collected job archives."""
+          
           import fnmatch
           import json
           import os
@@ -704,54 +700,83 @@ jobs:
           import re
           import sys
           import zipfile
-
-          def fail(message):
-              print(message)
-              sys.exit(1)
-
-          suites = json.loads(os.environ['SUITES'])
-          rules = [suite for suite in suites if 'match' in suite]
-          names = {suite.get('name') for suite in suites if 'match' not in suite}
-          statuses = json.loads(Path(os.environ['STATUS_FILE']).read_text())
-          found = {}
-          notes = []
-          searched = 0
-          for archive, status in sorted(statuses.items()) if rules else []:
-              path = Path(os.environ['ARTIFACTS']) / archive
-              if status != 'success' or not path.is_file():
-                  continue
-              searched += 1
-              with zipfile.ZipFile(path) as source:
-                  members = source.namelist()
-              for member in members:
-                  parts = re.fullmatch(r'hpc-benchmarks/([^/]+)\.json', member)
-                  if not parts:
-                      continue
-                  name = parts[1]
-                  if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_. -]{0,100}', name):
-                      fail(f'::error::The archive {archive} holds the invalid suite name {name!r}.')
-                  if name in names:
-                      fail(f'::error::Benchmark suite {name} is defined more than once, last in archive {archive}.')
-                  names.add(name)
-                  rule = next((rule for rule in rules if fnmatch.fnmatchcase(name, rule['match'])), None)
-                  if rule is None:
-                      fail(f'::error::No suite rule matches the benchmark suite {name} of archive {archive}.')
-                  found[name] = {key: value for key, value in rule.items() if key != 'match'} | {
-                      'name': name, 'archive': archive, 'file': member}
-                  notes.append(f'Benchmark suite {name} found in archive {archive}, rule {rule["match"]}.')
+          
           # The selected commit decides the number of written suites, each one starts a job.
-          if len(found) > 100:
-              fail(f'::error::The jobs wrote {len(found)} benchmark suites, at most 100 are supported.')
-          if rules:
+          WRITTEN_LIMIT = 100
+          
+          
+          def select(suites, statuses, artifacts):
+              """Return the suites to compare and the notes for the run summary.
+          
+              Named suites need the archive of a successful job.
+              Rules, the suites with a match, take their suites from the files
+              hpc-benchmarks/<suite name>.json of these archives, only the member names are read.
+              """
+              rules = [suite for suite in suites if 'match' in suite]
+              named = [suite for suite in suites if 'match' not in suite]
+              selected, notes = [], []
+              for suite in named:
+                  status = statuses.get(suite.get('archive'))
+                  if status == 'success':
+                      selected.append(suite)
+                  elif status is None:
+                      notes.append(f'Benchmark suite {suite.get("name")} skipped, this run collected no archive {suite.get("archive")}.')
+                  else:
+                      notes.append(f'Benchmark suite {suite.get("name")} skipped, the job of archive {suite.get("archive")} finished with {status}.')
+              if not rules:
+                  return selected, notes
+              names = {suite.get('name') for suite in named}
+              found = {}
+              searched = 0
+              for archive, status in sorted(statuses.items()):
+                  path = Path(artifacts) / archive
+                  if status != 'success' or not path.is_file():
+                      continue
+                  searched += 1
+                  with zipfile.ZipFile(path) as source:
+                      members = source.namelist()
+                  for member in members:
+                      parts = re.fullmatch(r'hpc-benchmarks/([^/]+)\.json', member)
+                      if not parts:
+                          continue
+                      name = parts[1]
+                      if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_. -]{0,100}', name):
+                          raise ValueError(f'The archive {archive} holds the invalid suite name {name!r}.')
+                      if name in names:
+                          raise ValueError(f'Benchmark suite {name} is defined more than once, last in archive {archive}.')
+                      names.add(name)
+                      rule = next((rule for rule in rules if fnmatch.fnmatchcase(name, rule['match'])), None)
+                      if rule is None:
+                          raise ValueError(f'No suite rule matches the benchmark suite {name} of archive {archive}.')
+                      found[name] = {key: value for key, value in rule.items() if key != 'match'} | {
+                          'name': name, 'archive': archive, 'file': member}
+                      notes.append(f'Benchmark suite {name} found in archive {archive}, rule {rule["match"]}.')
+              if len(found) > WRITTEN_LIMIT:
+                  raise ValueError(f'The jobs wrote {len(found)} benchmark suites, at most {WRITTEN_LIMIT} are supported.')
               notes.append(f'Found {len(found)} written benchmark suites in {searched} archives of successful jobs.')
+              return selected + [found[name] for name in sorted(found)], notes
+          
+          
+          def main():
+              suites = json.loads(os.environ['SUITES'])
+              statuses = json.loads(Path(os.environ['STATUS_FILE']).read_text())
+              try:
+                  selected, notes = select(suites, statuses, os.environ['ARTIFACTS'])
+              except ValueError as error:
+                  print(f'::error::{error}')
+                  sys.exit(1)
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
                   summary.write(''.join(f'{note}\n' for note in notes))
-          print(json.dumps([found[name] for name in sorted(found)]))
+              for suite in selected:
+                  print(f'Benchmark suite {suite.get("name")} selected, file {suite.get("file")} of archive {suite.get("archive")}.')
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                  output.write(f'suites={json.dumps(selected, separators=(",", ":"))}\n')
+          
+          
+          if __name__ == '__main__':
+              main()
+          # END EMBED select_suites.py
           PY
-          ) || { echo "$discovered"; exit 1; }
-          selected=$(jq -c --argjson discovered "$discovered" '. + $discovered' <<< "$selected")
-          jq -r '.[] | "Benchmark suite \(.name) selected, file \(.file) of archive \(.archive)."' <<< "$selected"
-          echo "suites=$selected" >> "$GITHUB_OUTPUT"
       - name: Report to the PR
         if: always() && steps.identity.outcome == 'success' && env.PR != ''
         shell: bash

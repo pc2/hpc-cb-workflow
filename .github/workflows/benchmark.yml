@@ -47,6 +47,7 @@ jobs:
         shell: bash
         run: |
           cat > "$RUNNER_TEMP/benchmark_support.py" <<'PY'
+          # BEGIN EMBED benchmark_support.py
           """Prepare collected measurements and report benchmark action results."""
           
           import argparse
@@ -314,6 +315,7 @@ jobs:
               parser.add_argument('operation', choices=['prepare', 'finish', 'unavailable'])
               args = parser.parse_args()
               globals()[args.operation]()
+          # END EMBED benchmark_support.py
           PY
       - name: Prepare benchmark comparison
         id: prepare

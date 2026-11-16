@@ -430,7 +430,8 @@ Continuation runs keep the variables and benchmark configuration of the original
 ### Unit tests
 
 `tests/` runs with mocked API responses and the pinned action revision, `GITHUB2LAB_SOURCE` selects a local action checkout.
-Reusable workflows embed the Python helpers from `scripts/`, run `python scripts/embed_helpers.py` after editing them and commit the generated workflows.
+The reusable workflows embed the Python helpers from `scripts/` between the lines `# BEGIN EMBED <file>` and `# END EMBED <file>`.
+Edit the helper, never the text between these lines, then run `python scripts/embed_helpers.py` and commit the workflows.
 The benchmark action checks run the pinned action against deterministic improvement, warning and failure measurements.
 
 ### Integration suite
