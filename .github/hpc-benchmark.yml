@@ -1,0 +1,10 @@
+mode: pages
+branch: hpc-results
+suites:
+  - name: "Linear {case}"
+    archive: benchmark.zip
+    file: results/benchmark-action.json
+    alert_threshold: 200%
+    fail_threshold: 1000%
+    matrix:
+      case: [solve]

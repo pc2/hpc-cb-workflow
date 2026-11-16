@@ -113,7 +113,8 @@ def test_integration_suite_covers_all_scenarios_and_verifies_without_write_acces
     assert set(history['on']) == {'push', 'schedule', 'workflow_dispatch'}
     assert history['on']['push'] == {'branches': ['main']}
     assert history['jobs']['benchmark']['uses'] == './.github/workflows/hpc-pipeline.yml'
-    assert json.loads(history['jobs']['benchmark']['with']['benchmark'])['mode'] == 'pages'
+    assert history['jobs']['benchmark']['with']['benchmark_file'] == '.github/hpc-benchmark.yml'
+    assert yaml.safe_load((root / '.github/hpc-benchmark.yml').read_text())['mode'] == 'pages'
     assert 'results/' in gitlab_ci['quick']['artifacts']['paths']
 assert jobs['wait']['timeout-minutes'] == '345'
 assert jobs['collect']['timeout-minutes'] == '${{ fromJSON(inputs.collect_timeout_minutes) }}'

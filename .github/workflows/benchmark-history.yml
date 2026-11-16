@@ -29,11 +29,7 @@ jobs:
       gitlab_project_id: ${{ vars.GITLAB_PROJECT_ID }}
       pipeline_variables: |
         SCENARIO=benchmark
-      benchmark: >-
-        {"mode":"pages","branch":"hpc-results","suites":[
-          {"name":"Linear solve","archive":"benchmark.zip",
-           "file":"results/benchmark-action.json","directory":"bench",
-           "alert_threshold":"200%","fail_threshold":"1000%"}]}
+      benchmark_file: .github/hpc-benchmark.yml
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}
