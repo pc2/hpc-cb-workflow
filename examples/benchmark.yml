@@ -54,12 +54,7 @@ jobs:
       variable_patterns: |
         CHECKS=none|all|(cpu|gpu)(\+(cpu|gpu))*
         BENCHMARKS=none|all|(cpu|gpu)(\+(cpu|gpu))*
-      benchmark: >-
-        {"mode":"history","branch":"hpc-results","suites":[
-          {"name":"CPU","archive":"bench-cpu.zip","file":"results/benchmark.json",
-           "directory":"bench","alert_threshold":"115%","fail_threshold":"150%"},
-          {"name":"GPU","archive":"bench-gpu.zip","file":"results/benchmark.json",
-           "directory":"bench","alert_threshold":"120%","fail_threshold":"200%"}]}
+      benchmark_file: .github/hpc-benchmark.yml
     secrets:
       GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
       GITLAB_TRIGGER_TOKEN: ${{ secrets.GITLAB_TRIGGER_TOKEN }}

@@ -6,11 +6,18 @@ The caller supplies its events, GitLab pipeline and cluster configuration.
 
 ```mermaid
 flowchart LR
-    Caller[Repository workflow] --> HPC[hpc-pipeline.yml]
-    HPC --> GitLab[github2lab_action]
-    GitLab --> Runners[GitLab runners]
-    HPC --> Artifacts[GitHub artifacts]
-    HPC --> Benchmark[github-action-benchmark]
+    Trigger["Push, schedule, dispatch or PR command"] --> Start
+    subgraph GitHub["GitHub, hpc-pipeline.yml"]
+        Start["Start"] --> Monitor["Monitor, check runs"]
+        Monitor --> Collect["Collect, artifacts and PR comment"]
+        Collect --> Benchmark["Benchmark, github-action-benchmark with history and Pages"]
+    end
+    subgraph GitLab["GitLab, reached with github2lab_action"]
+        Pipeline["Pipeline of the mirrored commit"] --> Jobs["Jobs on the cluster runners"]
+    end
+    Start -- "mirror and trigger" --> Pipeline
+    Pipeline -- "job status" --> Monitor
+    Jobs -- "artifacts" --> Collect
 ```
 
 GitLab operations use `pc2/github2lab_action`, all action references are pinned to commit hashes.
@@ -116,6 +123,7 @@ workflow:
 | `source_sha` | A reviewed commit of the PR, verified against `pull_request`. |
 | `command_comment` | The PR comment that authorized the run, set by the PR command. |
 | `benchmark` | Benchmark publication configuration as JSON, see below. |
+| `benchmark_file` | The path of a YAML file with the benchmark configuration, used instead of `benchmark`. |
 | `expected_pipeline_status` | The required terminal status, `success` by default, `failed` for deliberate failure tests. |
 | `max_wait_minutes` | Minutes one run monitors before continuing in another run, at most 330. |
 | `collect_timeout_minutes` | Minutes for collecting the artifacts after the pipeline finished, 60 by default, at most 360. |
@@ -189,16 +197,32 @@ GitLab tokens reach only the steps that use them, collected archives are stored 
 
 ### Configuration
 
-Set `benchmark` to publish measurements with [github-action-benchmark][gab] after a successful pipeline.
-Each suite selects one file inside one collected GitLab job archive, `archive` is the GitLab job name with `.zip`.
+Set `benchmark_file` to publish measurements with [github-action-benchmark][gab] after a successful pipeline.
+The file lives in the caller repository, for example [.github/hpc-benchmark.yml](examples/hpc-benchmark.yml).
 
 ```yaml
-benchmark: >-
-  {"mode":"history","branch":"hpc-results","suites":[
-    {"name":"CPU Julia 1.10","archive":"benchmark.zip",
-     "file":"results/benchmark.json","directory":"bench/cpu",
-     "alert_threshold":"115%","fail_threshold":"150%"}]}
+mode: history
+branch: hpc-results
+suites:
+  - name: "{device} {julia}"
+    archive: bench-{device}{julia}.zip
+    file: results/benchmark.json
+    alert_threshold: 115%
+    fail_threshold: 150%
+    matrix:
+      device: [cpu, gpu]
+      julia: ["1.10", "1.13"]
 ```
+
+The configuration runs nothing, the jobs are defined in `.gitlab-ci.yml` and selected by the pipeline variables.
+Each suite selects one file inside one collected GitLab job archive, `archive` is the GitLab job name with `.zip`.
+
+A suite with a `matrix` becomes one suite per combination of its values, `{name}` in the other keys is replaced by the value of that name.
+Matrix values are quoted strings, YAML would read an unquoted `1.10` as the number `1.1`.
+Quote values that start with a placeholder, and use every placeholder in `name`, since suite names must be unique.
+
+The workflow reads the file from the commit of the caller workflow, not from the selected commit, so a PR cannot change its own thresholds.
+Small configurations can be passed inline as JSON with `benchmark` instead, with the same keys.
 
 | Key | Meaning |
 | --- | --- |
@@ -211,6 +235,7 @@ benchmark: >-
 | `directory` | The dashboard directory on the branch, `bench` by default. |
 | `alert_threshold` | The warning ratio, `115%` by default, at least `100%`. |
 | `fail_threshold` | The failing ratio, `150%` by default, at least the warning ratio. |
+| `matrix` | Optional lists of values by placeholder name, see above. |
 
 ### Measurement files
 

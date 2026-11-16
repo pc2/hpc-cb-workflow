@@ -40,6 +40,10 @@ on:
         description: Optional JSON containing publication settings and benchmark suites.
         type: string
         default: '{}'
+      benchmark_file:
+        description: Optional path of a YAML file with the same settings, read from the commit of the caller workflow.
+        type: string
+        default: ''
       expected_pipeline_status:
         description: The required terminal status, failed is reserved for deliberate failure tests.
         type: string
@@ -201,6 +205,59 @@ jobs:
             fail "expected_pipeline_status must be success or failed, not '$EXPECTED_PIPELINE_STATUS'."
           [[ $COLLECT_TIMEOUT_MINUTES =~ ^[1-9][0-9]*$ && $COLLECT_TIMEOUT_MINUTES -le 360 ]] ||
             fail "collect_timeout_minutes must be between 1 and 360, not '$COLLECT_TIMEOUT_MINUTES'."
+      # The file comes from the commit of the caller workflow, so a PR cannot change its own thresholds.
+      - name: Resolve benchmark configuration
+        id: benchmark
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BENCHMARK: ${{ inputs.benchmark }}
+          BENCHMARK_FILE: ${{ inputs.benchmark_file }}
+        run: |
+          set -euo pipefail
+          fail() {
+            echo "::error::$1"
+            exit 1
+          }
+          if [[ -n $BENCHMARK_FILE ]]; then
+            jq -e '. == {}' <<< "$BENCHMARK" > /dev/null || fail 'Set benchmark or benchmark_file, not both.'
+            [[ $BENCHMARK_FILE =~ ^[A-Za-z0-9._/-]+\.ya?ml$ && $BENCHMARK_FILE != /* && $BENCHMARK_FILE != *..* ]] ||
+              fail "benchmark_file must be a relative path of a YAML file, not '$BENCHMARK_FILE'."
+            content=$(gh api "repos/$GITHUB_REPOSITORY/contents/$BENCHMARK_FILE?ref=$GITHUB_SHA" --jq .content 2> /dev/null | base64 -d) ||
+              fail "benchmark_file $BENCHMARK_FILE is missing in commit $GITHUB_SHA."
+            BENCHMARK=$(yq -o=json <<< "$content" 2> /dev/null) || fail "benchmark_file $BENCHMARK_FILE is not valid YAML."
+            jq -e 'type == "object" and ((.suites // []) | type == "array")' <<< "$BENCHMARK" > /dev/null 2>&1 ||
+              fail "benchmark_file $BENCHMARK_FILE must hold a mapping whose suites, if given, form a list."
+          fi
+          # A suite with a matrix becomes one suite per combination, {name} is replaced by the value of that name.
+          if ! config=$(jq -c '
+            def expand:
+              if type != "object" then error("Each benchmark suite must be a mapping.") else . end
+              | . as $suite
+              | (.matrix // {}) as $matrix
+              | (.name // "without name" | tostring) as $title
+              | if ($matrix | type) != "object"
+                  or any($matrix | to_entries[];
+                         (.key | test("^[A-Za-z_][A-Za-z0-9_]*$") | not)
+                         or (.value | type != "array" or length == 0 or any(.[]; type != "string" or test("[{}]"))))
+                then error("The matrix of suite \($title) must map placeholder names to nonempty lists of quoted strings.")
+                else . end
+              | [$matrix | to_entries[] | [{key, value: .value[]}]]
+              | combinations | from_entries | . as $values
+              | $suite | del(.matrix)
+              | map_values(if type == "string"
+                           then reduce ($values | to_entries[]) as $entry (.; split("{\($entry.key)}") | join($entry.value))
+                           else . end)
+              | if any(.[]; type == "string" and test("\\{[A-Za-z_][A-Za-z0-9_]*\\}"))
+                then error("Suite \($title) uses a placeholder that its matrix does not define.")
+                else . end;
+            if has("suites") then .suites |= [.[] | expand] else . end
+            | if ([.suites // [] | .[].name] | length != (unique | length))
+              then error("Benchmark suite names must be unique, use every matrix placeholder in the name.")
+              else . end' <<< "$BENCHMARK" 2>&1); then
+            fail "${config#*): }"
+          fi
+          echo "config=$config" >> "$GITHUB_OUTPUT"
       # Continuation dispatches the caller on the default branch, a missing caller or input surfaces only after max_wait_minutes.
       - name: Check continuation
         shell: bash
@@ -323,7 +380,7 @@ jobs:
           PR: ${{ env.HPC_PULL_REQUEST }}
           SOURCE_SHA: ${{ env.HPC_SOURCE_SHA || github.sha }}
           SOURCE_REF: ${{ env.HPC_SOURCE_SHA && format('hpc-pr-{0}-{1}', env.HPC_PULL_REQUEST, env.HPC_SOURCE_SHA) || github.ref_name }}
-          BENCHMARK: ${{ inputs.benchmark }}
+          BENCHMARK: ${{ steps.benchmark.outputs.config }}
           EXPECTED_PIPELINE_STATUS: ${{ inputs.expected_pipeline_status }}
         run: |
           set -euo pipefail

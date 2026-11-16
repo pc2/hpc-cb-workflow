@@ -59,6 +59,9 @@ for stub_path, target, workflow_file in [('.github/workflows/pr-command.yml', '.
     assert stub['permissions'] == command['permissions'], stub_path
     assert stub['jobs']['hpc']['uses'] == target and stub['jobs']['hpc']['with'] == {'workflow': workflow_file}
     assert stub['jobs']['hpc']['if'] == "github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')"
+example_suites = yaml.safe_load((root / 'examples/hpc-benchmark.yml').read_text())['suites']
+assert yaml.safe_load((root / 'examples/benchmark.yml').read_text())['jobs']['hpc']['with']['benchmark_file'] == '.github/hpc-benchmark.yml'
+assert all(isinstance(value, str) for suite in example_suites for values in suite['matrix'].values() for value in values)
 for example in ('manual', 'benchmark'):
     forwarded = yaml.load((root / f'examples/{example}.yml').read_text(), Loader=yaml.BaseLoader)['jobs']['hpc']['with']
     assert not {'context_run_id', 'pull_request', 'source_sha', 'command_comment'} & set(forwarded), example
@@ -181,6 +184,7 @@ assert 'env' not in prepare
 token_scopes = {
     'Authorize the run': {'GH_TOKEN'},
     'Check continuation': {'GH_TOKEN'},
+    'Resolve benchmark configuration': {'GH_TOKEN'},
     'Report a failed run to the PR': {'GH_TOKEN'},
     'Validate configuration': {'GITLAB_TOKEN', 'GITLAB_TRIGGER_TOKEN'},
     'Push the selected commit to GitLab': {'GITLAB_TOKEN'},
@@ -322,6 +326,15 @@ if sys.argv[1] == 'push':
     sys.exit(int(os.environ.get('MOCK_PUSH_EXIT', '0')))
 ''')
     git.chmod(0o755)
+    yq = bin_dir / 'yq'
+    yq.write_text(f'#!{sys.executable}\n' + '''
+import json
+import sys
+import yaml
+assert sys.argv[1:] == ['-o=json'], sys.argv
+print(json.dumps(yaml.safe_load(sys.stdin.read())))
+''')
+    yq.chmod(0o755)
     gh = bin_dir / 'gh'
     gh.write_text(f'#!{sys.executable}\n' + '''
 import json
@@ -608,6 +621,54 @@ print(value[args[args.index('--jq') + 1].lstrip('.')] if '--jq' in args else jso
         assert any(call[1] == 'repos/example/project/contents/.github/workflows/hpc.yml?ref=main' for call in calls)
 
     test_continuation_problems_are_reported_at_start()
+
+    def test_benchmark_file_is_read_from_the_caller_commit_and_expands_its_matrix():
+        resolve = by_name['Resolve benchmark configuration']['run']
+        save = by_name['Save pipeline context']
+        assert save['env']['BENCHMARK'] == '${{ steps.benchmark.outputs.config }}'
+        inline = {'mode': 'compare', 'suites': [{'name': 'CPU', 'archive': 'cpu.zip', 'file': 'benchmark.json'}]}
+        result = run(resolve, {'BENCHMARK': json.dumps(inline), 'BENCHMARK_FILE': ''})
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert json.loads(output.read_text().removeprefix('config=')) == inline
+        document = '''
+mode: pages
+suites:
+  - name: "{series} {julia} PID"
+    archive: scaling-{series}{julia}.zip
+    file: results/bench-{series}/{julia}/benchmark.json
+    alert_threshold: 130%
+    matrix:
+      series: [threads, mpi]
+      julia: ["1.10", "1.13"]
+  - name: GPU
+    archive: gpu.zip
+    file: benchmark.json
+'''
+        gh_log.write_text('')
+        result = run(resolve, {'BENCHMARK_FILE': '.github/hpc-benchmark.yml', 'MOCK_CALLER': document, 'GITHUB_SHA': 'c' * 40})
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        config = json.loads(output.read_text().removeprefix('config='))
+        assert config['mode'] == 'pages'
+        assert [suite['name'] for suite in config['suites']] == [
+            'threads 1.10 PID', 'threads 1.13 PID', 'mpi 1.10 PID', 'mpi 1.13 PID', 'GPU']
+        assert config['suites'][3] == {'name': 'mpi 1.13 PID', 'archive': 'scaling-mpi1.13.zip',
+                                       'file': 'results/bench-mpi/1.13/benchmark.json', 'alert_threshold': '130%'}
+        calls = [json.loads(line) for line in gh_log.read_text().splitlines()]
+        assert calls[0][1] == f'repos/example/project/contents/.github/hpc-benchmark.yml?ref={"c" * 40}'
+        suite = 'suites:\n  - name: "{series}"\n    archive: a.zip\n    file: "{other}.json"\n    matrix:\n      series: '
+        for overrides, message in [({'BENCHMARK': json.dumps(inline), 'MOCK_CALLER': document}, 'not both'),
+                                   ({'BENCHMARK_FILE': '../benchmark.yml'}, 'relative path'),
+                                   ({'BENCHMARK_FILE': 'benchmark.json'}, 'relative path'),
+                                   ({}, 'is missing in commit'), ({'MOCK_CALLER': 'suites: [unclosed'}, 'not valid YAML'),
+                                   ({'MOCK_CALLER': '- CPU'}, 'must hold a mapping'),
+                                   ({'MOCK_CALLER': suite + '[a]'}, 'placeholder that its matrix does not define'),
+                                   ({'MOCK_CALLER': suite.replace('{other}', 'b') + '[1.10]'}, 'quoted strings'),
+                                   ({'MOCK_CALLER': suite.replace('{other}', 'b').replace('"{series}"', 'CPU') + '[a, b]'},
+                                    'names must be unique')]:
+            result = run(resolve, {'BENCHMARK_FILE': '.github/hpc-benchmark.yml'} | overrides)
+            assert result.returncode != 0 and '::error::' in result.stdout and message in result.stdout, (overrides, result.stdout)
+
+    test_benchmark_file_is_read_from_the_caller_commit_and_expands_its_matrix()
 
     def test_benchmarks_start_only_for_suites_whose_archive_comes_from_a_successful_job():
         select = by_name['Select benchmark suites']['run']
