@@ -10,8 +10,26 @@ permissions:
   pull-requests: write
 
 jobs:
-  hpc:
+  # This check belongs to the caller, so it holds for every version of the called workflow.
+  authorize:
     if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require write access of the comment author
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          AUTHOR: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          permission=$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$AUTHOR/permission" --jq .permission)
+          if [[ $permission != write && $permission != admin ]]; then
+            echo "::error::$AUTHOR needs repository write access to start HPC runs."
+            exit 1
+          fi
+  hpc:
+    needs: authorize
     uses: pc2/hpc-cb-workflow/.github/workflows/hpc-command.yml@REVIEWED_COMMIT
     with:
       workflow: hpc.yml

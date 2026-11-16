@@ -180,7 +180,7 @@ The start job checks who started the run before anything is mirrored.
 | Push to the default branch or schedule. | None, the code is reviewed. |
 | Dispatch of the default branch without a PR. | None, the code is reviewed. |
 | Any other dispatch. | The actor needs repository write access. |
-| Dispatch by the PR command. | The comment author needs repository write access and the comment must name the selected commit. |
+| Dispatch by the PR command. | The comment author needs repository write access, checked by the caller stub, the command and the start job, and the comment must name the selected commit. |
 
 Pass `source_sha` and `pull_request` to run a reviewed commit of an open PR, including a fork commit, from the caller on the default branch.
 
@@ -336,8 +336,11 @@ GitHub starts comment workflows only in the commented repository, so this stub l
 Each commit requires its full 40 character hexadecimal hash and must belong to the PR.
 The full hash binds approval to the reviewed commit even if the PR changes before dispatch.
 
-The command verifies the commenter's repository write access and dispatches the caller once per commit.
-The start job checks the comment author for repository write access again.
+The comment author needs repository write access, which is checked three times.
+The `authorize` job of the stub checks it in the caller repository, before the command of this repository is called, so the check holds for every version of this workflow.
+The command checks it again and dispatches the caller once per commit, and the start job checks it a third time.
+
+A comment of a user without write access fails in the `authorize` job and gets no reply.
 
 Only named commits run, so a push after the review cannot reach the cluster.
 Earlier commits of the PR can run as well, for example to locate a benchmark regression.

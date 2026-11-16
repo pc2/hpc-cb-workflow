@@ -60,7 +60,20 @@ for stub_path, target, workflow_file in [('.github/workflows/pr-command.yml', '.
     assert stub['on'] == {'issue_comment': {'types': ['created']}}, stub_path
     assert stub['permissions'] == command['permissions'], stub_path
     assert stub['jobs']['hpc']['uses'] == target and stub['jobs']['hpc']['with'] == {'workflow': workflow_file}
-    assert stub['jobs']['hpc']['if'] == "github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')"
+    authorize = stub['jobs']['authorize']
+    assert authorize['if'] == "github.event.issue.pull_request && startsWith(github.event.comment.body, '/hpc')"
+    assert authorize['permissions'] == {} and stub['jobs']['hpc']['needs'] == 'authorize' and 'if' not in stub['jobs']['hpc']
+    script = authorize['steps'][0]['run']
+    for permission, expected in [('admin', 0), ('write', 0), ('read', 1), ('none', 1), ('', 1)]:
+        with tempfile.TemporaryDirectory(dir=root / '.tmp' if (root / '.tmp').is_dir() else None) as directory:
+            gh = Path(directory) / 'gh'
+            gh.write_text('#!/usr/bin/env bash\n[[ $2 == repos/example/project/collaborators/someone/permission ]] || exit 1\n'
+                          f'[[ -n "{permission}" ]] || exit 1\necho "{permission}"\n')
+            gh.chmod(0o755)
+            result = subprocess.run(['bash'], input=script, text=True, capture_output=True, timeout=30,
+                                    env={'PATH': f'{directory}:{os.environ["PATH"]}', 'AUTHOR': 'someone',
+                                         'GITHUB_REPOSITORY': 'example/project', 'GH_TOKEN': 'token'})
+            assert result.returncode == expected, (stub_path, permission, result.stdout, result.stderr)
 example_suites = yaml.safe_load((root / 'examples/hpc-benchmark.yml').read_text())['suites']
 assert yaml.safe_load((root / 'examples/benchmark.yml').read_text())['jobs']['hpc']['with']['benchmark_file'] == '.github/hpc-benchmark.yml'
 assert all('match' in suite for suite in example_suites)
