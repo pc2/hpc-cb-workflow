@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1794846224974,
+  "lastUpdate": 1795406620973,
   "repoUrl": "https://github.com/pc2/hpc-cb-workflow",
   "entries": {
     "Regression fixture": [
@@ -588,6 +588,33 @@ window.BENCHMARK_DATA = {
           "url": "https://github.com/pc2/hpc-cb-workflow/commit/901b80ed0809ed51b13386234c71c2ed6db736f5"
         },
         "date": 1794846224965,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "controlled measurement",
+            "value": 100,
+            "unit": "seconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "committer": {
+            "name": "Gerrit Pape",
+            "username": "papeg",
+            "email": "gerrit.pape@uni-paderborn.de"
+          },
+          "id": "901b80ed0809ed51b13386234c71c2ed6db736f5",
+          "message": "retry on every API failure",
+          "timestamp": "2026-11-16T16:21:25Z",
+          "url": "https://github.com/pc2/hpc-cb-workflow/commit/901b80ed0809ed51b13386234c71c2ed6db736f5"
+        },
+        "date": 1795406620962,
         "tool": "customSmallerIsBetter",
         "benches": [
           {
